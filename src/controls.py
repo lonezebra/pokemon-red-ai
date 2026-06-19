@@ -13,6 +13,14 @@ VALID_BUTTONS = {
 }
 
 
+DIRECTION_BUTTONS = {
+    "up",
+    "down",
+    "left",
+    "right",
+}
+
+
 def press_button(pyboy, button, hold_frames=20, release_frames=20):
     """
     Press and release a Game Boy button.
@@ -44,18 +52,75 @@ def press_sequence(pyboy, buttons, hold_frames=20, release_frames=20):
         )
 
 
-def walk_tile(pyboy, direction):
+def position_changed(before, after):
     """
-    Attempt to walk one tile in a direction.
-
-    Pokemon movement is tile-based. A short tap may only turn the character.
-    Holding the direction longer usually moves one full tile.
+    Return True if map/x/y changed.
     """
 
-    if direction not in {"up", "down", "left", "right"}:
+    return (
+        before["map_id"] != after["map_id"]
+        or before["x"] != after["x"]
+        or before["y"] != after["y"]
+    )
+
+
+def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20):
+    """
+    Walk one tile by holding a direction until memory says the player moved.
+
+    This is better than using a fixed hold time because movement timing can vary.
+    """
+
+    if direction not in DIRECTION_BUTTONS:
         raise ValueError(f"Invalid walking direction: {direction}")
 
-    press_button(pyboy, direction, hold_frames=25, release_frames=25)
+    from memory import get_player_position
+
+    before = get_player_position(pyboy)
+
+    print(f"Walking {direction} from {before}")
+
+    pyboy.button_press(direction)
+
+    moved = False
+    after = before
+
+    for held_frames in range(1, max_hold_frames + 1):
+        pyboy.tick()
+        after = get_player_position(pyboy)
+
+        if position_changed(before, after):
+            moved = True
+            print(f"  Position changed after {held_frames} held frame(s): {after}")
+            break
+
+    pyboy.button_release(direction)
+
+    # Let the walking animation finish before the next command.
+    run_frames(pyboy, settle_frames)
+
+    if not moved:
+        print(f"  No movement detected after holding {direction} for {max_hold_frames} frame(s).")
+        return False
+
+    return True
+
+
+def walk_until_position_changes(pyboy, direction, max_attempts=3):
+    """
+    Try to walk in a direction.
+
+    Kept for compatibility with navigation.py.
+    """
+
+    for attempt in range(1, max_attempts + 1):
+        print(f"Attempt {attempt} to walk {direction}")
+        moved = walk_tile(pyboy, direction)
+
+        if moved:
+            return True
+
+    return False
 
 
 def walk_tiles(pyboy, direction, count):
@@ -64,4 +129,9 @@ def walk_tiles(pyboy, direction, count):
     """
 
     for _ in range(count):
-        walk_tile(pyboy, direction)
+        moved = walk_tile(pyboy, direction)
+
+        if not moved:
+            return False
+
+    return True
