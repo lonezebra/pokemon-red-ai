@@ -16,18 +16,6 @@ VALID_BUTTONS = {
 def press_button(pyboy, button, hold_frames=20, release_frames=20):
     """
     Press and release a Game Boy button.
-
-    Args:
-        pyboy: The running PyBoy emulator.
-        button: The button to press, such as "a", "start", or "up".
-        hold_frames: How long to hold the button.
-        release_frames: How long to wait after releasing the button.
-
-    Why hold and release frames matter:
-        Games do not respond to an abstract "button click".
-        They respond to whether a button is currently down during a frame.
-        So we press the button, tick the emulator forward, release the button,
-        then tick forward again.
     """
 
     if button not in VALID_BUTTONS:
@@ -45,9 +33,6 @@ def press_button(pyboy, button, hold_frames=20, release_frames=20):
 def press_sequence(pyboy, buttons, hold_frames=20, release_frames=20):
     """
     Press a list of buttons in order.
-
-    Example:
-        press_sequence(pyboy, ["start", "a", "a"])
     """
 
     for button in buttons:
@@ -57,3 +42,26 @@ def press_sequence(pyboy, buttons, hold_frames=20, release_frames=20):
             hold_frames=hold_frames,
             release_frames=release_frames,
         )
+
+
+def walk_tile(pyboy, direction):
+    """
+    Attempt to walk one tile in a direction.
+
+    Pokemon movement is tile-based. A short tap may only turn the character.
+    Holding the direction longer usually moves one full tile.
+    """
+
+    if direction not in {"up", "down", "left", "right"}:
+        raise ValueError(f"Invalid walking direction: {direction}")
+
+    press_button(pyboy, direction, hold_frames=25, release_frames=25)
+
+
+def walk_tiles(pyboy, direction, count):
+    """
+    Walk multiple tiles in one direction.
+    """
+
+    for _ in range(count):
+        walk_tile(pyboy, direction)
