@@ -16,4 +16,4 @@ WINDOW_MODE = "SDL2"
 # Emulation speed:
 # 1 = normal speed
 # 0 = unlimited speed
-EMULATION_SPEED = 1
+EMULATION_SPEED = 0
