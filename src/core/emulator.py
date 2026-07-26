@@ -1,6 +1,6 @@
 from pyboy import PyBoy
 
-from config import ROM_PATH, WINDOW_MODE, EMULATION_SPEED
+from core.config import ROM_PATH, WINDOW_MODE, EMULATION_SPEED
 
 #loading save states
 #resetting the game

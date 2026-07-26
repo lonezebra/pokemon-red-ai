@@ -1,4 +1,4 @@
-from emulator import run_frames
+from core.emulator import run_frames
 
 
 VALID_BUTTONS = {
@@ -28,8 +28,6 @@ def press_button(pyboy, button, hold_frames=20, release_frames=20):
 
     if button not in VALID_BUTTONS:
         raise ValueError(f"Invalid button: {button}. Valid buttons are: {VALID_BUTTONS}")
-
-    print(f"Pressing {button}")
 
     pyboy.button_press(button)
     run_frames(pyboy, hold_frames)
@@ -64,21 +62,26 @@ def position_changed(before, after):
     )
 
 
-def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20):
+def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20, verbose=True):
     """
     Walk one tile by holding a direction until memory says the player moved.
 
     This is better than using a fixed hold time because movement timing can vary.
+
+    verbose=False silences the per-tile prints below -- useful for the small
+    scripted route scripts, but a real RL training loop calls this thousands
+    of times and the prints would just bury everything else in noise.
     """
 
     if direction not in DIRECTION_BUTTONS:
         raise ValueError(f"Invalid walking direction: {direction}")
 
-    from memory import get_player_position
+    from core.memory import get_player_position
 
     before = get_player_position(pyboy)
 
-    print(f"Walking {direction} from {before}")
+    if verbose:
+        print(f"Walking {direction} from {before}")
 
     pyboy.button_press(direction)
 
@@ -91,7 +94,8 @@ def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20):
 
         if position_changed(before, after):
             moved = True
-            print(f"  Position changed after {held_frames} held frame(s): {after}")
+            if verbose:
+                print(f"  Position changed after {held_frames} held frame(s): {after}")
             break
 
     pyboy.button_release(direction)
@@ -100,7 +104,8 @@ def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20):
     run_frames(pyboy, settle_frames)
 
     if not moved:
-        print(f"  No movement detected after holding {direction} for {max_hold_frames} frame(s).")
+        if verbose:
+            print(f"  No movement detected after holding {direction} for {max_hold_frames} frame(s).")
         return False
 
     return True
@@ -135,3 +140,25 @@ def walk_tiles(pyboy, direction, count):
             return False
 
     return True
+
+
+def advance_battle_dialogue(pyboy, max_presses=60, hold_frames=10, release_frames=15):
+    """
+    Press A repeatedly until the battle is ready for the next player
+    decision (the FIGHT/ITEM/RUN menu reopens) or the battle has ended.
+
+    Different moves/messages take different numbers of text boxes to
+    clear, so this checks the actual game state after each press instead
+    of using a fixed press count -- the same idea as walk_tile() checking
+    position instead of trusting a fixed hold time.
+    """
+
+    from core.memory import is_battle_menu_open, is_in_battle
+
+    for _ in range(max_presses):
+        if is_battle_menu_open(pyboy) or not is_in_battle(pyboy):
+            return True
+
+        press_button(pyboy, "a", hold_frames=hold_frames, release_frames=release_frames)
+
+    return is_battle_menu_open(pyboy) or not is_in_battle(pyboy)

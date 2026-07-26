@@ -1,6 +1,6 @@
-from memory import get_player_position, print_player_position
-from controls import walk_until_position_changes
-from emulator import run_frames
+from core.memory import get_player_position, print_player_position
+from core.controls import walk_until_position_changes
+from core.emulator import run_frames
 
 
 def walk_to(pyboy, target_x, target_y, max_steps=50):

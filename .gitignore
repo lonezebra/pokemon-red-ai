@@ -5,5 +5,6 @@ __pycache__/
 roms/
 saves/
 screenshots/
+models/
 
 .DS_Store
