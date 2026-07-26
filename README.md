@@ -199,12 +199,21 @@ trained, and verified:
   small table the same way three coordinates do.
 - **`src/watch_battle_agent.py`** loads a trained model and plays 100
   battles with learning turned off, to measure how good it actually is.
-  **Current result: 100/100 wins** (the project's bar for "good enough to
-  move on" was 90/100).
 
-Two real bugs were caught and fixed while building this, both by testing
-against known ground truth instead of trusting the first version that
-ran without crashing:
+`battle_env.py` also randomizes the player's starting battle stats on
+every reset by default (`randomize_stats=True`), rolling them within the
+real range a freshly-obtained level-5 Squirtle can have (see
+`memory.randomize_battle_mon_stats`). This isn't a hypothetical concern —
+seeing it matter is exactly why it's here. **Current results: 92/100
+wins evaluated against randomized stats (0 losses turned into stuck
+episodes — see below), and 50/50 wins against the original fixed
+matchup** the project started with — so the trained policy generalizes
+in both directions rather than trading one for the other. The project's
+bar for "good enough to move on" was 90/100.
+
+Three real bugs were caught and fixed while building this, all by
+testing against known ground truth instead of trusting the first version
+that ran without crashing:
 
 - The battle menu's move cursor turned out to be **sticky** (it
   remembers the last move you used, rather than resetting each turn) and
@@ -214,6 +223,16 @@ ran without crashing:
   checking which move's PP actually went down, not just trusting the
   intended button sequence.
 - See `advance_battle_dialogue()` above for the second one.
+- Picking an invalid move slot originally left the game state completely
+  unchanged (just a penalty, no button pressed). That seemed harmless
+  until a trained policy's greedy choice for some observation happened
+  to *be* an invalid slot — since nothing about an unchanged state ever
+  looks different to the network, it would deadlock forever repeating
+  that exact wrong pick, burning every remaining step of the episode.
+  Caught by noticing evaluation episodes were timing out frozen at the
+  same HP values instead of ending in a win or loss. Fixed by having the
+  environment substitute the first valid move and actually play it —
+  still penalized, but never able to stall the battle completely.
 
 ### Chaining trained skills together (`src/agents/skills.py`, `src/controller.py`)
 
@@ -228,11 +247,55 @@ toward:
   never needs to know or care which.
 - **`src/controller.py`** runs both skills through that interface,
   starting each from its own save state. It's honestly not one
-  continuous run yet — see the file's own docstring — because the route
-  between "reached Pallet Town" and "rival battle about to start" (Oak's
-  trigger, the lab, choosing a starter) still isn't scripted in this
-  repo. That's the next gap to close before this becomes a true single
-  bedroom-to-battle-won demonstration.
+  continuous run yet — see the file's own docstring — for the reason
+  below.
+
+### Scripting the missing middle route (`src/create_starter_obtained_state.py`)
+
+This closes the gap the controller and an earlier roadmap version both
+called out: walking from Pallet Town to Professor Oak's trigger, through
+the automatic walk-in to the lab, and choosing Squirtle, all from
+`outside_house.state` — no pre-made save state required for this part
+anymore.
+
+Two of the same "don't trust a fixed press count" bugs as elsewhere in
+this project showed up again here, in new forms:
+
+- Part of this sequence is genuinely automatic (the game itself walks
+  the player from the door to a fixed arrival tile) — but the exact
+  number of A-presses needed to get *through* the dialogue before and
+  after it drifts slightly between runs, because a few frames of timing
+  variance earlier (from `walk_tile`'s "hold until moved" checks) shift
+  where later dialogue pagination lands. Worse, once real control
+  actually returns, keep pressing A the fixed number of times and it just
+  re-triggers the same prompt again. The fix: press A once, immediately
+  test the actual next move in the real route, and only press A again if
+  that test fails — so the loop stops the instant control is genuinely
+  back, never overshooting.
+- Detecting "the starter was actually obtained" needed its own real
+  signal, the same way battle-end detection did: `wPartyCount` (0xD163),
+  verified to read 0 before a starter and 1 after across every save state
+  in this project before being trusted.
+
+**An important limitation this surfaced, not papered over:** the
+starter's hidden stats (IVs) are randomly rolled at the moment it's
+created, based on the game's RNG state — which depends on the exact
+number of frames consumed by everything before that point. Running this
+script doesn't reproduce the *exact same* Squirtle every time, just *a*
+Squirtle at the same milestone. Checked directly: a fresh run produced a
+Squirtle with 19 max HP instead of 20, and feeding that into the
+then-trained battle DQN dropped it from 100/100 wins to 0/10 — the
+policy had implicitly learned the specifics of one exact matchup, not
+"Squirtle vs. this Bulbasaur" in general.
+
+**Update: fixed.** Rather than trying to reproduce one exact Squirtle,
+`battle_env.py` now randomizes the player's stats within the real
+possible range on every reset (see the battle section above) and the
+model was retrained against that. Generating several sample starters and
+reading their actual stats (rather than trusting a stat formula from
+memory, which turned out to be slightly wrong) also showed the enemy's
+stats never vary at all — Gen 1 trainer Pokemon have fixed IVs — so only
+the player's side needed this.
 
 ### Scouting scripts (the scaffolding, not the destination)
 
@@ -261,37 +324,39 @@ Here's where this is headed, and why each step is designed the way it is.
 1. ~~Actually train a Q-learning agent for the leave-house task.~~ **Done**
    — see `agents/q_learning_agent.py` above. 30/30 in evaluation, a
    19-step path every time.
-2. **Chain more of the game's opening: reaching Professor Oak, choosing a
-   starter Pokemon, and the forced first battle against your rival.**
-   Half-done, to be precise about it: `saves/starter_obtained.state`
-   exists (created outside this repo, on the project owner's own
-   machine, before this repo's history), and `create_rival_battle_state.py`
-   reliably takes it the rest of the way to `saves/rival_battle.state`.
-   What's still missing is the scripted route *into* `starter_obtained.state`
-   itself — walking from Pallet Town to Professor Oak's trigger, into the
-   lab, and choosing a starter — which was done by hand previously but
-   was never ported into this repo as actual code. Until that exists,
-   this repo can only start battle-related work from an already-uploaded
-   save state, not build one from scratch.
+2. ~~Chain more of the game's opening: reaching Professor Oak, choosing a
+   starter Pokemon, and the forced first battle against your rival.~~
+   **Done** — `create_starter_obtained_state.py` scripts the whole route
+   from `outside_house.state`, and `create_rival_battle_state.py`
+   reliably takes it the rest of the way. The IV-variance caveat this
+   used to carry is resolved -- see item 3.
 3. ~~Battles need a different kind of learner than walking does.~~ **Done**
    — see `battle_env.py`/`train_battle_agent.py` above. The rival battle
-   is currently beaten reliably (100/100 in evaluation), by a small
-   neural network, not a lookup table, matching the reasoning that HP
-   totals and move outcomes don't compress into a small table the way
-   three coordinates do.
+   is beaten reliably (92/100 against randomized starting stats, 50/50
+   against the original fixed matchup) by a small neural network, not a
+   lookup table, matching the reasoning that HP totals and move outcomes
+   don't compress into a small table the way three coordinates do. The
+   policy is also now robust to the starter IV variance from item 2,
+   rather than having implicitly memorized one exact matchup.
 4. **A hand-written "controller"** (`src/controller.py`) chains
    individually trained skills together through one uniform
-   `choose_action(observation) -> action` interface
-   (`agents/skills.py`), regardless of whether a skill is a lookup table
-   or a neural network underneath. Right now it runs two proven segments
-   — `bedroom.state` through the leave-house Q-agent to Pallet Town, and
-   `rival_battle.state` through the battle DQN to a win — but **not yet
-   as one continuous run**, because of the gap in item 2 above: there's
-   no scripted bridge yet between "reached Pallet Town" and "rival battle
-   about to start." Once that bridge is scripted, this is where it plugs
-   in as a third segment, with a hand-off condition at each step that's
-   already proven elsewhere in this project (a map_id check, or the
-   battle-flag check from `memory.is_in_battle`).
+   `choose_action(observation) -> action` interface (`agents/skills.py`).
+   Right now it still runs two proven segments rather than one
+   continuous sequence — `bedroom.state` through the leave-house Q-agent
+   to Pallet Town, and `rival_battle.state` through the battle DQN to a
+   win. Trying to actually wire the scripted bridge in as a third segment
+   surfaced a new, real gap rather than the "mechanical" step it looked
+   like: the Q-agent's learned 19-step path exits the house at `(3, 7)`,
+   not the `(5, 6)` tile `create_starter_obtained_state.py`'s route to
+   Oak's trigger assumes as its starting point. A naive fixed bridge
+   between the two produced a two-tile, off-axis jump on the very first
+   step — almost certainly a warp/edge interaction near the player's
+   house, not a bug in either skill individually. Reverted rather than
+   shipped half-working; mapping Pallet Town's layout well enough to
+   bridge any reachable exit point to the Oak-trigger route (or
+   retraining the Q-agent to land exactly on `(5, 6)`) is the next real
+   step here, and it's a separate task from the IV-variance work in item
+   3 above, not a continuation of it.
 5. **Wild Pokemon encounters** are a different flavor of battle from the
    rival fight — the opponent varies, and unlike a rival fight you
    actually *can* run away — so they'll get their own environment variant
