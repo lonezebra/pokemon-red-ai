@@ -135,10 +135,34 @@ The first task built this way, and still the simplest:
   completely random moves. It isn't meant to be smart — it exists to
   prove the environment itself works correctly (rewards make sense, the
   episode ends when it should, nothing crashes) *before* plugging in
-  something that actually learns. **This is still where this particular
-  task stands** — the environment is proven, but a real learning agent
-  (a Q-learning lookup table, same idea as the battle work below, just
-  simpler) hasn't been trained for it yet. See the roadmap.
+  something that actually learns.
+- **`src/agents/q_learning_agent.py`** is the actual learner: a tabular
+  Q-learning agent (state = `(map_id, x, y)`, one value per action per
+  state, updated from trial and error). **`src/train_q_agent.py`** trains
+  it and **`src/watch_q_agent.py`** evaluates it. Current result: **30/30
+  wins**, taking the same 19-step path every time.
+
+  Getting there caught a real bug and a real under-training problem,
+  both only visible by actually evaluating the trained policy instead of
+  trusting the training-time success counter:
+  - `leave_house_rewards.py`'s downstairs bonus (+5) originally checked
+    the *current* map every step rather than whether the agent had just
+    *arrived* there. Since reaching downstairs doesn't end the episode,
+    the agent could sit there collecting +5 per step instead of pushing
+    on — a training run "succeeding" 62/500 times was actually mostly
+    measuring how well it learned to loiter, not to finish, given away
+    by episode rewards (500-970) far higher than the reward design
+    should ever produce.
+  - Once that was fixed, a 500-episode run *looked* fine during training
+    but its resulting policy failed every single evaluation episode,
+    stuck repeating a wall-bump forever at one downstairs tile. Its
+    learned values for that state were nearly identical across all four
+    possible actions — undecided noise, not a real preference. Q-learning
+    only updates a state when the agent actually passes through it, and
+    reaching downstairs was itself infrequent early on, so everything
+    past it got far fewer updates than the bedroom did. More episodes
+    (2000) and slower exploration decay, giving those deeper states more
+    chances to actually be learned, fixed it.
 
 ### Reaching, and beating, the first rival battle (`src/rewards/battle_rewards.py`, `src/envs/battle_env.py`, `src/train_battle_agent.py`, `src/watch_battle_agent.py`)
 
@@ -215,14 +239,9 @@ things meant to run forever:
 
 Here's where this is headed, and why each step is designed the way it is.
 
-1. **Actually train a Q-learning agent for the leave-house task.** Right
-   now `simple_env.py` is proven but nothing intelligent has learned to
-   use it yet — a small **Q-learning agent** (a lookup table mapping
-   "where am I" to "which direction has worked out best from here so
-   far," updated after every attempt) is still the next thing to build
-   for this specific task. This got skipped over for a while in favor of
-   the battle milestone below, since save states for the later parts of
-   the game's opening were already available — it's still on the list.
+1. ~~Actually train a Q-learning agent for the leave-house task.~~ **Done**
+   — see `agents/q_learning_agent.py` above. 30/30 in evaluation, a
+   19-step path every time.
 2. ~~Chain more of the game's opening: reaching Professor Oak, choosing a
    starter Pokemon, and the forced first battle against your rival.~~
    **Done** — `saves/starter_obtained.state` and
@@ -234,13 +253,13 @@ Here's where this is headed, and why each step is designed the way it is.
    neural network, not a lookup table, matching the reasoning that HP
    totals and move outcomes don't compress into a small table the way
    three coordinates do.
-4. **A hand-written "controller"** will eventually chain the individually
-   trained skills together for a real end-to-end run — run the walking
-   skill until a battle starts, then hand control to the battle skill,
-   then hand control back — the same philosophy as everything above, just
-   one level up: script the handoffs, learn the behavior. This is the
-   natural next piece once the leave-house Q-learning agent (item 1) also
-   exists, so there are two trained skills to actually chain together.
+4. **A hand-written "controller"** will chain the individually trained
+   skills together for a real end-to-end run — run the walking skill
+   until a battle starts, then hand control to the battle skill, then
+   hand control back — the same philosophy as everything above, just one
+   level up: script the handoffs, learn the behavior. There are now two
+   genuinely trained skills (leave-house, rival-battle) to actually chain
+   together, so this is the natural next piece.
 5. **Wild Pokemon encounters** are a different flavor of battle from the
    rival fight — the opponent varies, and unlike a rival fight you
    actually *can* run away — so they'll get their own environment variant
