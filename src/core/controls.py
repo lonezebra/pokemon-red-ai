@@ -62,11 +62,15 @@ def position_changed(before, after):
     )
 
 
-def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20):
+def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20, verbose=True):
     """
     Walk one tile by holding a direction until memory says the player moved.
 
     This is better than using a fixed hold time because movement timing can vary.
+
+    verbose=False silences the per-tile prints below -- useful for the small
+    scripted route scripts, but a real RL training loop calls this thousands
+    of times and the prints would just bury everything else in noise.
     """
 
     if direction not in DIRECTION_BUTTONS:
@@ -76,7 +80,8 @@ def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20):
 
     before = get_player_position(pyboy)
 
-    print(f"Walking {direction} from {before}")
+    if verbose:
+        print(f"Walking {direction} from {before}")
 
     pyboy.button_press(direction)
 
@@ -89,7 +94,8 @@ def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20):
 
         if position_changed(before, after):
             moved = True
-            print(f"  Position changed after {held_frames} held frame(s): {after}")
+            if verbose:
+                print(f"  Position changed after {held_frames} held frame(s): {after}")
             break
 
     pyboy.button_release(direction)
@@ -98,7 +104,8 @@ def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20):
     run_frames(pyboy, settle_frames)
 
     if not moved:
-        print(f"  No movement detected after holding {direction} for {max_hold_frames} frame(s).")
+        if verbose:
+            print(f"  No movement detected after holding {direction} for {max_hold_frames} frame(s).")
         return False
 
     return True

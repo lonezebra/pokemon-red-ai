@@ -56,7 +56,7 @@ class PokemonRedLeaveHouseEnv:
         before = get_player_position(self.pyboy)
 
         direction = get_action_name(action_id)
-        moved = walk_tile(self.pyboy, direction)
+        moved = walk_tile(self.pyboy, direction, verbose=False)
 
         # Give the game a few frames to settle.
         run_frames(self.pyboy, 10)
