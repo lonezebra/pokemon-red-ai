@@ -47,7 +47,12 @@ def calculate_leave_house_reward(before, after, visited_positions):
     if after_key not in visited_positions:
         reward += 1.0
 
-    if after["map_id"] == DOWNSTAIRS_MAP_ID:
+    # Checking before != after here matters: reaching downstairs doesn't end
+    # the episode (unlike Pallet Town below), so checking current map alone
+    # would pay out +5 on every single step the agent lingers on that map --
+    # discovered by noticing training rewards were far higher than the
+    # reward design should ever allow in a 200-step episode.
+    if after["map_id"] == DOWNSTAIRS_MAP_ID and before["map_id"] != DOWNSTAIRS_MAP_ID:
         reward += 5.0
 
     if after["map_id"] == PALLET_TOWN_MAP_ID:
