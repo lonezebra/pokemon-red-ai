@@ -29,8 +29,6 @@ def press_button(pyboy, button, hold_frames=20, release_frames=20):
     if button not in VALID_BUTTONS:
         raise ValueError(f"Invalid button: {button}. Valid buttons are: {VALID_BUTTONS}")
 
-    print(f"Pressing {button}")
-
     pyboy.button_press(button)
     run_frames(pyboy, hold_frames)
 
