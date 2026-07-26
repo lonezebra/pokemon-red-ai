@@ -215,6 +215,25 @@ ran without crashing:
   intended button sequence.
 - See `advance_battle_dialogue()` above for the second one.
 
+### Chaining trained skills together (`src/agents/skills.py`, `src/controller.py`)
+
+With two genuinely trained skills now existing (leave-house, rival-battle),
+this is the first piece of the "controller" the roadmap has been pointing
+toward:
+
+- **`src/agents/skills.py`** wraps each trained skill behind the exact
+  same interface: `skill.choose_action(observation)`. Under the hood,
+  `LeaveHouseSkill` is a dictionary lookup and `RivalBattleSkill` calls a
+  neural network's `.predict()` — a controller calling `choose_action()`
+  never needs to know or care which.
+- **`src/controller.py`** runs both skills through that interface,
+  starting each from its own save state. It's honestly not one
+  continuous run yet — see the file's own docstring — because the route
+  between "reached Pallet Town" and "rival battle about to start" (Oak's
+  trigger, the lab, choosing a starter) still isn't scripted in this
+  repo. That's the next gap to close before this becomes a true single
+  bedroom-to-battle-won demonstration.
+
 ### Scouting scripts (the scaffolding, not the destination)
 
 A handful of scripts were how the coordinates and routes above were
@@ -242,24 +261,37 @@ Here's where this is headed, and why each step is designed the way it is.
 1. ~~Actually train a Q-learning agent for the leave-house task.~~ **Done**
    — see `agents/q_learning_agent.py` above. 30/30 in evaluation, a
    19-step path every time.
-2. ~~Chain more of the game's opening: reaching Professor Oak, choosing a
-   starter Pokemon, and the forced first battle against your rival.~~
-   **Done** — `saves/starter_obtained.state` and
-   `saves/rival_battle.state` exist, and `create_rival_battle_state.py`
-   documents exactly how the rival-battle trigger works.
+2. **Chain more of the game's opening: reaching Professor Oak, choosing a
+   starter Pokemon, and the forced first battle against your rival.**
+   Half-done, to be precise about it: `saves/starter_obtained.state`
+   exists (created outside this repo, on the project owner's own
+   machine, before this repo's history), and `create_rival_battle_state.py`
+   reliably takes it the rest of the way to `saves/rival_battle.state`.
+   What's still missing is the scripted route *into* `starter_obtained.state`
+   itself — walking from Pallet Town to Professor Oak's trigger, into the
+   lab, and choosing a starter — which was done by hand previously but
+   was never ported into this repo as actual code. Until that exists,
+   this repo can only start battle-related work from an already-uploaded
+   save state, not build one from scratch.
 3. ~~Battles need a different kind of learner than walking does.~~ **Done**
    — see `battle_env.py`/`train_battle_agent.py` above. The rival battle
    is currently beaten reliably (100/100 in evaluation), by a small
    neural network, not a lookup table, matching the reasoning that HP
    totals and move outcomes don't compress into a small table the way
    three coordinates do.
-4. **A hand-written "controller"** will chain the individually trained
-   skills together for a real end-to-end run — run the walking skill
-   until a battle starts, then hand control to the battle skill, then
-   hand control back — the same philosophy as everything above, just one
-   level up: script the handoffs, learn the behavior. There are now two
-   genuinely trained skills (leave-house, rival-battle) to actually chain
-   together, so this is the natural next piece.
+4. **A hand-written "controller"** (`src/controller.py`) chains
+   individually trained skills together through one uniform
+   `choose_action(observation) -> action` interface
+   (`agents/skills.py`), regardless of whether a skill is a lookup table
+   or a neural network underneath. Right now it runs two proven segments
+   — `bedroom.state` through the leave-house Q-agent to Pallet Town, and
+   `rival_battle.state` through the battle DQN to a win — but **not yet
+   as one continuous run**, because of the gap in item 2 above: there's
+   no scripted bridge yet between "reached Pallet Town" and "rival battle
+   about to start." Once that bridge is scripted, this is where it plugs
+   in as a third segment, with a hand-off condition at each step that's
+   already proven elsewhere in this project (a map_id check, or the
+   battle-flag check from `memory.is_in_battle`).
 5. **Wild Pokemon encounters** are a different flavor of battle from the
    rival fight — the opponent varies, and unlike a rival fight you
    actually *can* run away — so they'll get their own environment variant
