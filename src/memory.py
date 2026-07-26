@@ -127,3 +127,67 @@ def print_battle_state(pyboy, label="Battle state"):
     print(f"Your HP:       {state['battle_mon_hp']}/{state['battle_mon_max_hp']}")
     print(f"Your moves/PP: {list(zip(state['battle_mon_moves'], state['battle_mon_pp']))}")
     print(f"Enemy HP:      {state['enemy_mon_hp']}/{state['enemy_mon_max_hp']}")
+
+
+# Detecting "the battle is ready for the next player decision" (the
+# FIGHT/ITEM/RUN menu is on screen) without guessing a fixed number of
+# dialogue-advancing button presses.
+#
+# Different moves produce different amounts of text (e.g. Tail Whip adds
+# a "The enemy's DEFENSE fell!" message that Tackle doesn't), so a fixed
+# press count is unreliable -- this was discovered empirically while
+# building the battle environment. Instead, we compare the window
+# tilemap (where PyBoy renders text boxes/menus) against a known-good
+# snapshot captured from a verified rival_battle.state, the same instant
+# the FIGHT/ITEM/RUN menu is shown for the very first turn.
+
+BATTLE_MENU_TILEMAP_ROWS = range(12, 18)
+
+BATTLE_MENU_REFERENCE_TILEMAP = (
+    (377, 378, 378, 378, 378, 378, 378, 378, 377, 378, 378, 378, 378, 378, 378, 378, 378, 378, 378, 379),
+    (380, 383, 383, 383, 383, 383, 383, 383, 380, 383, 383, 383, 383, 383, 383, 383, 383, 383, 383, 380),
+    (380, 383, 383, 383, 383, 383, 383, 383, 380, 237, 133, 136, 134, 135, 147, 383, 225, 226, 383, 380),
+    (380, 383, 383, 383, 383, 383, 383, 383, 380, 383, 383, 383, 383, 383, 383, 383, 383, 383, 383, 380),
+    (380, 383, 383, 383, 383, 383, 383, 383, 380, 383, 136, 147, 132, 140, 383, 383, 145, 148, 141, 380),
+    (381, 378, 378, 378, 378, 378, 378, 378, 381, 378, 378, 378, 378, 378, 378, 378, 378, 378, 378, 382),
+)
+
+
+def is_battle_menu_open(pyboy):
+    """
+    True exactly when the FIGHT/ITEM/RUN menu is on screen and the battle
+    is waiting for the next player decision.
+    """
+
+    current = tuple(
+        tuple(pyboy.tilemap_window[col, row] for col in range(20))
+        for row in BATTLE_MENU_TILEMAP_ROWS
+    )
+    return current == BATTLE_MENU_REFERENCE_TILEMAP
+
+
+# Reading which move is currently highlighted in the FIGHT move-select
+# list. This turned out to matter a lot: the cursor is "sticky" (it
+# remembers the last move used rather than resetting each turn), and the
+# move list wraps around instead of clamping at the top/bottom -- both
+# discovered empirically while building the battle environment. That
+# combination makes a fixed sequence of up/down presses unreliable, so we
+# read the cursor's actual row (marked by the "> " arrow tile, ID 237) in
+# the window tilemap instead of assuming a starting position.
+
+MOVE_CURSOR_ARROW_TILE_ID = 237
+MOVE_CURSOR_COLUMN = 5
+MOVE_CURSOR_ROWS = (13, 14, 15, 16)  # move slots 0-3
+
+
+def get_move_cursor_slot(pyboy):
+    """
+    Return which move slot (0-3) the cursor is currently on, or None if
+    the move list isn't open / the arrow can't be found.
+    """
+
+    for slot, row in enumerate(MOVE_CURSOR_ROWS):
+        if pyboy.tilemap_window[MOVE_CURSOR_COLUMN, row] == MOVE_CURSOR_ARROW_TILE_ID:
+            return slot
+
+    return None

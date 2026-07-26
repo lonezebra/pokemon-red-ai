@@ -135,3 +135,25 @@ def walk_tiles(pyboy, direction, count):
             return False
 
     return True
+
+
+def advance_battle_dialogue(pyboy, max_presses=60, hold_frames=10, release_frames=15):
+    """
+    Press A repeatedly until the battle is ready for the next player
+    decision (the FIGHT/ITEM/RUN menu reopens) or the battle has ended.
+
+    Different moves/messages take different numbers of text boxes to
+    clear, so this checks the actual game state after each press instead
+    of using a fixed press count -- the same idea as walk_tile() checking
+    position instead of trusting a fixed hold time.
+    """
+
+    from memory import is_battle_menu_open, is_in_battle
+
+    for _ in range(max_presses):
+        if is_battle_menu_open(pyboy) or not is_in_battle(pyboy):
+            return True
+
+        press_button(pyboy, "a", hold_frames=hold_frames, release_frames=release_frames)
+
+    return is_battle_menu_open(pyboy) or not is_in_battle(pyboy)
