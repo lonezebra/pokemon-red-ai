@@ -236,19 +236,40 @@ that ran without crashing:
 
 ### Chaining trained skills together (`src/agents/skills.py`, `src/controller.py`)
 
-With two genuinely trained skills now existing (leave-house, rival-battle),
-this is the first piece of the "controller" the roadmap has been pointing
-toward:
+This is the payoff the whole project has been building toward: **one
+continuous run**, from waking up in the bedroom all the way to beating
+the rival, with no manual save-state hand-offs in the middle.
+
+```
+bedroom.state -> [leave-house Q-agent] -> Pallet Town
+              -> [scripted route]      -> Oak -> lab -> choose Squirtle
+              -> [scripted route]      -> rival's trigger
+              -> [rival-battle DQN]    -> win
+```
 
 - **`src/agents/skills.py`** wraps each trained skill behind the exact
   same interface: `skill.choose_action(observation)`. Under the hood,
   `LeaveHouseSkill` is a dictionary lookup and `RivalBattleSkill` calls a
-  neural network's `.predict()` — a controller calling `choose_action()`
-  never needs to know or care which.
-- **`src/controller.py`** runs both skills through that interface,
-  starting each from its own save state. It's honestly not one
-  continuous run yet — see the file's own docstring — for the reason
-  below.
+  neural network's `.predict()` — `controller.py` calling
+  `choose_action()` never needs to know or care which.
+- **`src/controller.py`** runs the whole sequence above over a single
+  shared PyBoy session, mixing learned skills and scripted routes freely
+  since they all speak the same "read state, decide, act" language.
+
+Getting the hand-off from segment 1 to segment 2 actually working needed
+one more real fix, not just calling things in the right order. The
+leave-house Q-agent's episode ends the instant `map_id` becomes 0
+(Pallet Town) — but that's not the final resting position. The game
+keeps auto-walking the player a couple more tiles out of the doorway on
+its own afterward, no input needed. Trying to act immediately (an
+earlier version of this controller did) collided with that in-progress
+automatic movement and produced a nonsensical multi-tile position jump.
+The fix, `controls.wait_for_position_to_settle()`, just polls position
+until it stops changing on its own — the same "check the real state,
+don't guess" idea as everywhere else in this project — and reliably
+lands at the exact tile `saves/outside_house.state` represents, which is
+where the scripted route to Oak's trigger already assumes it starts.
+Verified reliable across multiple full runs, bedroom to battle won.
 
 ### Scripting the missing middle route (`src/create_starter_obtained_state.py`)
 
@@ -338,25 +359,16 @@ Here's where this is headed, and why each step is designed the way it is.
    don't compress into a small table the way three coordinates do. The
    policy is also now robust to the starter IV variance from item 2,
    rather than having implicitly memorized one exact matchup.
-4. **A hand-written "controller"** (`src/controller.py`) chains
-   individually trained skills together through one uniform
-   `choose_action(observation) -> action` interface (`agents/skills.py`).
-   Right now it still runs two proven segments rather than one
-   continuous sequence — `bedroom.state` through the leave-house Q-agent
-   to Pallet Town, and `rival_battle.state` through the battle DQN to a
-   win. Trying to actually wire the scripted bridge in as a third segment
-   surfaced a new, real gap rather than the "mechanical" step it looked
-   like: the Q-agent's learned 19-step path exits the house at `(3, 7)`,
-   not the `(5, 6)` tile `create_starter_obtained_state.py`'s route to
-   Oak's trigger assumes as its starting point. A naive fixed bridge
-   between the two produced a two-tile, off-axis jump on the very first
-   step — almost certainly a warp/edge interaction near the player's
-   house, not a bug in either skill individually. Reverted rather than
-   shipped half-working; mapping Pallet Town's layout well enough to
-   bridge any reachable exit point to the Oak-trigger route (or
-   retraining the Q-agent to land exactly on `(5, 6)`) is the next real
-   step here, and it's a separate task from the IV-variance work in item
-   3 above, not a continuation of it.
+4. ~~A hand-written "controller" chains individually trained skills
+   together.~~ **Done** — see `src/controller.py` above. One continuous
+   run, `bedroom.state` to a won rival battle, verified reliable across
+   multiple runs. (An earlier attempt at this hit what looked like a
+   real blocker — the leave-house Q-agent's path exits the house at a
+   different tile than the scripted route to Oak's trigger assumed — but
+   it turned out to be a timing issue, not a layout one: waiting for the
+   game's own automatic "step out of the doorway" animation to finish,
+   instead of acting immediately, landed at the expected tile every
+   time.)
 5. **Wild Pokemon encounters** are a different flavor of battle from the
    rival fight — the opponent varies, and unlike a rival fight you
    actually *can* run away — so they'll get their own environment variant

@@ -1,116 +1,193 @@
 """
-Hand-written controller: chains individually trained skills together
-through one uniform interface, rather than each skill needing its own
-special-cased driving code.
+Hand-written controller: chains individually trained/scripted skills
+together through one uniform interface, over a single continuous PyBoy
+session, rather than each skill needing its own special-cased driving
+code or its own separate emulator instance.
 
-What this actually does right now is run the two skills that exist so
-far, each through skill.choose_action(observation) -> action, each
-starting from its own save state:
+    bedroom.state -> [leave-house Q-agent]     -> Pallet Town
+                   -> [scripted route]          -> Oak -> lab -> starter
+                   -> [scripted route]          -> rival's trigger
+                   -> [rival-battle DQN]        -> win/loss
 
-    saves/bedroom.state      -> [leave-house Q-agent] -> Pallet Town
-    saves/rival_battle.state -> [rival-battle DQN]     -> win/loss
+Each learned skill (leave-house Q-agent, rival-battle DQN) is called
+through agents.skills' choose_action(observation) -> action interface, so
+this file never needs to know whether a given decision came from a
+lookup table or a neural network. The scripted segments in between reuse
+the exact same routes already verified in create_starter_obtained_state.py
+and create_rival_battle_state.py -- this file just chains them onto one
+live session instead of each reloading its own save state.
 
-These two segments are NOT chained into one continuous run yet. The
-scripted bridge between them now exists --
-create_starter_obtained_state.py walks to Professor Oak, through the
-lab, and chooses a starter -- but it isn't wired in here on purpose: the
-starter it produces has randomly-varying stats (see that script's module
-docstring), and the battle DQN above was only ever trained against one
-specific stat roll. Chaining it in today would mean the battle segment
-fails most of the time, for reasons that have nothing to do with the
-controller or the hand-off logic itself.
+Getting from segment 1 to segment 2 needed one more fix beyond just
+calling things in order: the leave-house Q-agent's episode ends the
+instant map_id becomes 0 (Pallet Town), but that's not actually the
+final resting position -- the game keeps auto-walking the player a
+couple more tiles out of the doorway on its own afterward, with no input
+needed. Trying to act immediately collided with that in-progress
+movement and produced a nonsensical multi-tile position jump. Waiting
+for position to stop changing on its own
+(controls.wait_for_position_to_settle) fixed it, and reliably lands at
+the same (5, 6) tile saves/outside_house.state represents -- exactly
+where the scripted route to Oak's trigger already assumes it starts.
 
-Once the battle DQN is trained to be robust to that variance, this is
-the natural place to wire the bridge in as a third segment, so a single
-run can go:
-
-    bedroom.state -> Q-agent -> Pallet Town
-                  -> scripted route -> Oak -> starter -> rival trigger
-                  -> DQN -> win
-
-with the hand-off condition at each step being something already proven
-in this project (a map_id check, or the battle-flag check from
-memory.is_in_battle) -- script the hand-offs, learn the behavior in
-between.
+Note: the individual Gymnasium environments (envs/simple_env.py,
+envs/battle_env.py) each create and own their own emulator, which is
+right for training (every episode needs a clean, fast reset) but not
+directly reusable for "hand a live session from one skill to the next."
+So the battle segment below re-implements battle_env.py's move-selection
+and observation logic against the shared pyboy instance rather than
+constructing a PokemonRedRivalBattleEnv -- a small amount of duplication,
+traded for not reloading rival_battle.state partway through what's
+supposed to be one continuous run.
 """
 
-from envs.simple_env import PokemonRedLeaveHouseEnv
-from envs.battle_env import PokemonRedRivalBattleEnv
+import numpy as np
+
+from core.emulator import create_emulator, run_frames
+from core.state import load_state, BEDROOM_STATE_PATH
+from core.controls import walk_tile, press_button, advance_battle_dialogue, wait_for_position_to_settle
+from core.memory import get_player_position, get_battle_state, get_move_cursor_slot
 from agents.skills import LeaveHouseSkill, RivalBattleSkill
+from actions import get_action_name
 from core.config import PROJECT_ROOT
+from rewards.leave_house_rewards import PALLET_TOWN_MAP_ID
+from create_starter_obtained_state import walk_to_oak_trigger, wait_for_lab_arrival, choose_starter
+from create_rival_battle_state import walk_to_rival_trigger_and_battle
 
 
-def run_leave_house_segment(max_steps=200):
+def run_leave_house_segment(pyboy, max_steps=200):
     print()
     print("Segment 1: bedroom.state -> leave-house Q-agent -> Pallet Town")
     print("-" * 62)
 
-    env = PokemonRedLeaveHouseEnv(max_steps=max_steps)
     skill = LeaveHouseSkill(PROJECT_ROOT / "models" / "leave_house_q_table.json")
 
-    obs = env.reset()
-    info = {}
-
-    for _ in range(max_steps):
-        action = skill.choose_action(obs)
-        obs, reward, done, info = env.step(action)
-
-        if done:
+    for step in range(max_steps):
+        pos = get_player_position(pyboy)
+        if pos["map_id"] == PALLET_TOWN_MAP_ID:
             break
 
-    env.close()
+        action = skill.choose_action(pos)
+        walk_tile(pyboy, get_action_name(action), verbose=False)
+        run_frames(pyboy, 10)
 
-    reached_goal = info.get("reached_goal", False)
-
-    if reached_goal:
-        print(f"Reached Pallet Town in {info['step_count']} steps.")
-    else:
+    if get_player_position(pyboy)["map_id"] != PALLET_TOWN_MAP_ID:
         print("Did not reach Pallet Town within the step limit.")
+        return False
 
-    return reached_goal
+    # map_id becoming 0 isn't the final resting position -- see the
+    # module docstring for why this matters.
+    settled_pos = wait_for_position_to_settle(pyboy)
+    print(f"Reached Pallet Town, settled at {settled_pos}.")
+    return True
 
 
-def run_rival_battle_segment(max_steps=30):
+def run_starter_segment(pyboy, starter_name="squirtle"):
     print()
-    print("Segment 2: rival_battle.state -> rival-battle DQN -> win/loss")
+    print("Segment 2: Pallet Town -> Oak's trigger -> lab -> choose starter")
     print("-" * 62)
 
-    env = PokemonRedRivalBattleEnv(max_steps=max_steps)
+    print("Walking to Oak's trigger...")
+    walk_to_oak_trigger(pyboy)
+
+    print("Waiting for the automatic walk-in to the lab...")
+    if not wait_for_lab_arrival(pyboy):
+        print("Warning: did not reach the lab arrival tile as expected.")
+        return False
+
+    print(f"Choosing {starter_name}...")
+    if not choose_starter(pyboy, starter_name):
+        print("Warning: starter was not obtained.")
+        return False
+
+    print("Starter obtained.")
+    return True
+
+
+NUM_MOVE_SLOTS = 4
+
+
+def _battle_observation(state):
+    your_fraction = state["battle_mon_hp"] / max(state["battle_mon_max_hp"], 1)
+    enemy_fraction = state["enemy_mon_hp"] / max(state["enemy_mon_max_hp"], 1)
+
+    move_valid = [
+        1.0 if (state["battle_mon_moves"][i] != 0 and state["battle_mon_pp"][i] > 0) else 0.0
+        for i in range(NUM_MOVE_SLOTS)
+    ]
+
+    return np.array([your_fraction, enemy_fraction] + move_valid, dtype=np.float32)
+
+
+def _select_battle_move(pyboy, slot_index):
+    # Same cursor-position-aware navigation as battle_env.py -- see that
+    # file for why a fixed up/down sequence doesn't work here.
+    press_button(pyboy, "a", hold_frames=10, release_frames=15)
+
+    current_slot = get_move_cursor_slot(pyboy)
+    if current_slot is not None:
+        if slot_index > current_slot:
+            for _ in range(slot_index - current_slot):
+                press_button(pyboy, "down", hold_frames=10, release_frames=15)
+        elif slot_index < current_slot:
+            for _ in range(current_slot - slot_index):
+                press_button(pyboy, "up", hold_frames=10, release_frames=15)
+
+    press_button(pyboy, "a", hold_frames=10, release_frames=15)
+    advance_battle_dialogue(pyboy)
+
+
+def run_rival_battle_segment(pyboy, max_steps=30):
+    print()
+    print("Segment 3: walk to rival's trigger -> battle DQN -> win/loss")
+    print("-" * 62)
+
+    print("Walking to the rival's trigger and into the battle...")
+    if not walk_to_rival_trigger_and_battle(pyboy):
+        print("Warning: did not reach the battle as expected.")
+        return False
+
     skill = RivalBattleSkill(PROJECT_ROOT / "models" / "rival_battle_dqn.zip")
 
-    obs, info = env.reset()
-
     for _ in range(max_steps):
-        action = skill.choose_action(obs)
-        obs, reward, terminated, truncated, info = env.step(action)
-
-        if terminated or truncated:
+        state = get_battle_state(pyboy)
+        if not state["in_battle"]:
             break
 
-    env.close()
+        valid_slots = [
+            i
+            for i in range(NUM_MOVE_SLOTS)
+            if state["battle_mon_moves"][i] != 0 and state["battle_mon_pp"][i] > 0
+        ]
 
-    won = info["after"]["enemy_mon_hp"] == 0
+        action = skill.choose_action(_battle_observation(state))
+        actual_action = action if action in valid_slots else valid_slots[0]
+        _select_battle_move(pyboy, actual_action)
+
+    final_state = get_battle_state(pyboy)
+    won = final_state["enemy_mon_hp"] == 0
 
     print("Won the rival battle." if won else "Did not win the rival battle.")
-
     return won
 
 
 def main():
-    print("Pokemon Red AI -- controller")
-    print()
-    print("Running each currently-trained skill through the same")
-    print("choose_action(observation) -> action interface. See this")
-    print("file's module docstring for why these are two separate")
-    print("segments rather than one continuous run, for now.")
+    print("Pokemon Red AI -- controller (one continuous run)")
 
-    leave_house_ok = run_leave_house_segment()
-    battle_ok = run_rival_battle_segment()
+    pyboy = create_emulator()
+    load_state(pyboy, BEDROOM_STATE_PATH)
+    run_frames(pyboy, 60)
+
+    leave_house_ok = run_leave_house_segment(pyboy)
+    starter_ok = run_starter_segment(pyboy) if leave_house_ok else False
+    battle_ok = run_rival_battle_segment(pyboy) if starter_ok else False
+
+    pyboy.stop()
 
     print()
     print("Summary")
     print("-" * 62)
     print(f"Leave-house segment:  {'OK' if leave_house_ok else 'FAILED'}")
+    print(f"Starter segment:      {'OK' if starter_ok else 'FAILED'}")
     print(f"Rival-battle segment: {'OK' if battle_ok else 'FAILED'}")
 
 

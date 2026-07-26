@@ -3,6 +3,7 @@ from core.state import load_state, save_state, STARTER_OBTAINED_STATE_PATH, RIVA
 from core.controls import press_button, walk_tile
 from core.memory import get_player_position, print_player_position
 from core.screen import save_screenshot
+from create_starter_obtained_state import wait_for_control_and_walk
 
 
 # Findings from probing this by hand, starting at starter_obtained.state
@@ -37,6 +38,45 @@ PRESSES_TO_FIRST_BATTLE_MENU = 31
 def advance_dialogue(pyboy, presses, hold_frames=15, release_frames=25):
     for _ in range(presses):
         press_button(pyboy, "a", hold_frames=hold_frames, release_frames=release_frames)
+
+
+def walk_to_rival_trigger_and_battle(pyboy):
+    """
+    From a live session where the player already has free movement in
+    Oak's Lab right after choosing a starter (e.g. straight out of
+    create_starter_obtained_state.choose_starter(), continuing the same
+    pyboy instance rather than reloading a save file), walk to the
+    rival's trigger tile and through the dialogue into the first battle
+    menu.
+
+    Unlike main()'s fixed DIALOGUE_PRESSES_AFTER_STARTER count -- tuned
+    for the specific entry point of loading starter_obtained.state fresh
+    -- this uses the same robust "press A, then test the real next move"
+    pattern as create_starter_obtained_state.py, since chaining live from
+    a different exact entry point is exactly the kind of frame-timing
+    drift that made fixed counts unreliable elsewhere in this project.
+    """
+
+    if not wait_for_control_and_walk(pyboy, ROUTE_TO_RIVAL_TRIGGER[0]):
+        print("Warning: never regained control to start walking to the rival trigger.")
+        return False
+
+    for direction in ROUTE_TO_RIVAL_TRIGGER[1:]:
+        walk_tile(pyboy, direction, verbose=False)
+        run_frames(pyboy, 10)
+
+    pos = get_player_position(pyboy)
+    print_player_position(pyboy, "Position at rival trigger")
+
+    if pos["map_id"] != TRIGGER_MAP_ID or pos["x"] != TRIGGER_X or pos["y"] != TRIGGER_Y:
+        print(
+            f"Warning: expected trigger tile (map {TRIGGER_MAP_ID}, "
+            f"x={TRIGGER_X}, y={TRIGGER_Y}), got {pos}."
+        )
+        return False
+
+    advance_dialogue(pyboy, PRESSES_TO_FIRST_BATTLE_MENU)
+    return True
 
 
 def main():
