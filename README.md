@@ -228,11 +228,52 @@ toward:
   never needs to know or care which.
 - **`src/controller.py`** runs both skills through that interface,
   starting each from its own save state. It's honestly not one
-  continuous run yet — see the file's own docstring — because the route
-  between "reached Pallet Town" and "rival battle about to start" (Oak's
-  trigger, the lab, choosing a starter) still isn't scripted in this
-  repo. That's the next gap to close before this becomes a true single
-  bedroom-to-battle-won demonstration.
+  continuous run yet — see the file's own docstring — for the reason
+  below.
+
+### Scripting the missing middle route (`src/create_starter_obtained_state.py`)
+
+This closes the gap the controller and an earlier roadmap version both
+called out: walking from Pallet Town to Professor Oak's trigger, through
+the automatic walk-in to the lab, and choosing Squirtle, all from
+`outside_house.state` — no pre-made save state required for this part
+anymore.
+
+Two of the same "don't trust a fixed press count" bugs as elsewhere in
+this project showed up again here, in new forms:
+
+- Part of this sequence is genuinely automatic (the game itself walks
+  the player from the door to a fixed arrival tile) — but the exact
+  number of A-presses needed to get *through* the dialogue before and
+  after it drifts slightly between runs, because a few frames of timing
+  variance earlier (from `walk_tile`'s "hold until moved" checks) shift
+  where later dialogue pagination lands. Worse, once real control
+  actually returns, keep pressing A the fixed number of times and it just
+  re-triggers the same prompt again. The fix: press A once, immediately
+  test the actual next move in the real route, and only press A again if
+  that test fails — so the loop stops the instant control is genuinely
+  back, never overshooting.
+- Detecting "the starter was actually obtained" needed its own real
+  signal, the same way battle-end detection did: `wPartyCount` (0xD163),
+  verified to read 0 before a starter and 1 after across every save state
+  in this project before being trusted.
+
+**An important limitation this surfaced, not papered over:** the
+starter's hidden stats (IVs) are randomly rolled at the moment it's
+created, based on the game's RNG state — which depends on the exact
+number of frames consumed by everything before that point. Running this
+script doesn't reproduce the *exact same* Squirtle every time, just *a*
+Squirtle at the same milestone. Checked directly: a fresh run produced a
+Squirtle with 19 max HP instead of 20, and feeding that into the
+already-trained battle DQN dropped it from 100/100 wins to 0/10 —
+the policy had implicitly learned the specifics of one exact matchup,
+not "Squirtle vs. this Bulbasaur" in general. `saves/rival_battle.state`
+and the trained model in this repo are still the original, verified
+pairing; this script is a real, working route to the same milestone, but
+not yet a drop-in replacement feeding the existing trained model. Making
+the battle DQN robust to that variance (e.g. training against
+randomized starting stats) is the next thing needed before the full
+bedroom-to-battle-won chain can be trusted end to end.
 
 ### Scouting scripts (the scaffolding, not the destination)
 
@@ -261,18 +302,16 @@ Here's where this is headed, and why each step is designed the way it is.
 1. ~~Actually train a Q-learning agent for the leave-house task.~~ **Done**
    — see `agents/q_learning_agent.py` above. 30/30 in evaluation, a
    19-step path every time.
-2. **Chain more of the game's opening: reaching Professor Oak, choosing a
-   starter Pokemon, and the forced first battle against your rival.**
-   Half-done, to be precise about it: `saves/starter_obtained.state`
-   exists (created outside this repo, on the project owner's own
-   machine, before this repo's history), and `create_rival_battle_state.py`
-   reliably takes it the rest of the way to `saves/rival_battle.state`.
-   What's still missing is the scripted route *into* `starter_obtained.state`
-   itself — walking from Pallet Town to Professor Oak's trigger, into the
-   lab, and choosing a starter — which was done by hand previously but
-   was never ported into this repo as actual code. Until that exists,
-   this repo can only start battle-related work from an already-uploaded
-   save state, not build one from scratch.
+2. ~~Chain more of the game's opening: reaching Professor Oak, choosing a
+   starter Pokemon, and the forced first battle against your rival.~~
+   **Done, with a caveat** — `create_starter_obtained_state.py` now
+   scripts the whole route from `outside_house.state`, and
+   `create_rival_battle_state.py` reliably takes it the rest of the way.
+   The caveat: the starter's exact stats (IVs) vary between runs (see
+   above), so a freshly-generated encounter isn't guaranteed to match
+   what the trained battle DQN was calibrated against. That's folded into
+   item 4 below, since it's really the same open question — how robust
+   does the battle policy need to be — not a separate task.
 3. ~~Battles need a different kind of learner than walking does.~~ **Done**
    — see `battle_env.py`/`train_battle_agent.py` above. The rival battle
    is currently beaten reliably (100/100 in evaluation), by a small
@@ -286,12 +325,16 @@ Here's where this is headed, and why each step is designed the way it is.
    or a neural network underneath. Right now it runs two proven segments
    — `bedroom.state` through the leave-house Q-agent to Pallet Town, and
    `rival_battle.state` through the battle DQN to a win — but **not yet
-   as one continuous run**, because of the gap in item 2 above: there's
-   no scripted bridge yet between "reached Pallet Town" and "rival battle
-   about to start." Once that bridge is scripted, this is where it plugs
-   in as a third segment, with a hand-off condition at each step that's
-   already proven elsewhere in this project (a map_id check, or the
-   battle-flag check from `memory.is_in_battle`).
+   as one continuous run**. The scripted bridge between them now exists
+   (`create_starter_obtained_state.py`), but wiring it in directly isn't
+   worth doing yet: since that script produces a starter with randomly
+   varying stats, and the battle DQN was only ever trained against one
+   specific stat roll, a genuinely continuous run would likely just fail
+   at the battle step most of the time. The real next step is making the
+   battle DQN robust to that variance (e.g. training with randomized
+   starting stats instead of the one fixed encounter it has now) — once
+   that's true, plugging the scripted bridge into the controller as a
+   third segment is mechanical.
 5. **Wild Pokemon encounters** are a different flavor of battle from the
    rival fight — the opponent varies, and unlike a rival fight you
    actually *can* run away — so they'll get their own environment variant

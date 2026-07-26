@@ -11,14 +11,18 @@ starting from its own save state:
     saves/rival_battle.state -> [rival-battle DQN]     -> win/loss
 
 These two segments are NOT chained into one continuous run yet. The
-missing piece is the middle of the game's opening: walking to Professor
-Oak, choosing a starter, and walking back to where the rival stops the
-player. That was done by hand on the project owner's machine (see the
-original handoff notes) but hasn't been ported into this repo as a
-scripted route yet.
+scripted bridge between them now exists --
+create_starter_obtained_state.py walks to Professor Oak, through the
+lab, and chooses a starter -- but it isn't wired in here on purpose: the
+starter it produces has randomly-varying stats (see that script's module
+docstring), and the battle DQN above was only ever trained against one
+specific stat roll. Chaining it in today would mean the battle segment
+fails most of the time, for reasons that have nothing to do with the
+controller or the hand-off logic itself.
 
-Once that route exists, this is the natural place to wire it in as a
-third segment, so a single run can go:
+Once the battle DQN is trained to be robust to that variance, this is
+the natural place to wire the bridge in as a third segment, so a single
+run can go:
 
     bedroom.state -> Q-agent -> Pallet Town
                   -> scripted route -> Oak -> starter -> rival trigger
