@@ -6,14 +6,20 @@ from core.config import PROJECT_ROOT
 MODEL_PATH = PROJECT_ROOT / "models" / "route1_q_table.json"
 
 
-def main(num_episodes=4000, max_steps=150):
-    # Route 1 is a much longer corridor than the leave-house task (roughly
-    # 35 tiles from the Pallet Town entrance to Viridian City, versus a
-    # ~19-step optimal path out of the bedroom), so it needs a larger step
-    # budget per episode and more episodes to give the deeper/further-away
-    # tiles enough visits to actually be learned -- the same lesson the
-    # leave-house agent's under-training bug taught: a state only gets
-    # updated when the agent actually passes through it.
+def main(num_episodes=1500, max_steps=800):
+    # A first attempt at this used max_steps=150 (matching leave-house's
+    # cap) and ran for 1000+ episodes without a single success, even once
+    # epsilon had decayed low enough that the agent was mostly exploiting
+    # rather than exploring -- a sign the goal was simply never reached,
+    # not that it wasn't learned yet. Scouting the route by hand (an
+    # up-biased random walk) confirmed why: reaching Viridian City takes
+    # around 670 steps, more than 3x that budget. Since Q-learning can
+    # only learn from the goal reward if an episode actually reaches it,
+    # a too-small step cap means the +100 reward never enters the table
+    # at all, no matter how many episodes run. 800 gives real headroom
+    # above that 670-step reference; episode count was reduced from an
+    # initial 4000 to keep total training time from ballooning now that
+    # each episode can run much longer.
     env = PokemonRedRoute1Env(max_steps=max_steps)
     agent = QLearningAgent(num_actions=num_actions())
 
