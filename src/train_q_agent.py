@@ -6,7 +6,18 @@ from core.config import PROJECT_ROOT
 MODEL_PATH = PROJECT_ROOT / "models" / "leave_house_q_table.json"
 
 
-def main(num_episodes=500, max_steps=200):
+def main(num_episodes=2000, max_steps=200):
+    # 500 episodes was tried first and looked like it worked (successes
+    # climbing during training) but the trained policy actually failed
+    # every single evaluation episode, stuck repeating a wall-bump action
+    # at one downstairs tile. Q-learning only updates a state when the
+    # agent actually passes through it, and reaching downstairs was itself
+    # rare early on, so everything past it barely got trained -- its
+    # Q-values were nearly identical across all four actions (undecided
+    # noise, not a real preference). 2000 episodes, combined with a slower
+    # epsilon decay (see QLearningAgent) so exploration keeps reaching
+    # those deeper states for longer, converges to a policy that wins
+    # reliably instead of just sometimes during training.
     env = PokemonRedLeaveHouseEnv(max_steps=max_steps)
     agent = QLearningAgent(num_actions=num_actions())
 

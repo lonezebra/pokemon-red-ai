@@ -24,7 +24,7 @@ class QLearningAgent:
         discount_factor=0.95,
         epsilon=1.0,
         epsilon_min=0.05,
-        epsilon_decay=0.995,
+        epsilon_decay=0.998,  # see train_q_agent.py for why this isn't faster
     ):
         self.num_actions = num_actions
         self.learning_rate = learning_rate
