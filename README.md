@@ -101,9 +101,10 @@ directly (kept flat in `src/` so every command below stays simple —
 - **`src/core/state.py`** saves and loads PyBoy save states — snapshots of
   the entire game at one instant. Several exist now, each captured at a
   meaningful checkpoint: standing in the bedroom, standing outside the
-  house, arriving at Oak's Lab, having just picked a starter Pokemon, and
-  the moment the first rival battle begins. Resetting to any of these
-  takes about a second, instead of replaying everything before it.
+  house, arriving at Oak's Lab, having just picked a starter Pokemon, the
+  moment the first rival battle begins, and standing in Route 1's tall
+  grass just after winning that battle. Resetting to any of these takes
+  about a second, instead of replaying everything before it.
 - **`src/core/screen.py`** saves a screenshot of the current game screen.
   Used throughout for visually double-checking that a script (or a memory
   reading) actually reflects what's really happening on screen.
@@ -238,13 +239,15 @@ that ran without crashing:
 
 This is the payoff the whole project has been building toward: **one
 continuous run**, from waking up in the bedroom all the way to beating
-the rival, with no manual save-state hand-offs in the middle.
+the rival and stepping into Route 1, with no manual save-state hand-offs
+in the middle.
 
 ```
 bedroom.state -> [leave-house Q-agent] -> Pallet Town
               -> [scripted route]      -> Oak -> lab -> choose Squirtle
               -> [scripted route]      -> rival's trigger
               -> [rival-battle DQN]    -> win
+              -> [scripted route]      -> Route 1's entrance
 ```
 
 - **`src/agents/skills.py`** wraps each trained skill behind the exact
@@ -270,6 +273,46 @@ don't guess" idea as everywhere else in this project — and reliably
 lands at the exact tile `saves/outside_house.state` represents, which is
 where the scripted route to Oak's trigger already assumes it starts.
 Verified reliable across multiple full runs, bedroom to battle won.
+
+### Reaching Route 1 (`src/create_route1_entry_state.py`)
+
+Winning the rival battle isn't the end of the road — the controller now
+carries on one segment further, out of Oak's Lab and up to the edge of
+Route 1, the path toward Viridian City and, eventually, Brock.
+
+Finding this route needed real investigation, not just chaining known
+pieces together, because two assumptions turned out to be wrong:
+
+- Winning the battle doesn't hand control back immediately — there's a
+  post-battle dialogue sequence to clear first (Blue reacting to the
+  loss), the same "press A, then test for real movement, stop the
+  instant it works" pattern used everywhere else in this project for
+  dialogue-then-movement handoffs.
+- Oak's Lab has its *own* exit door, separate from the player's house.
+  Walking out of it does not land you back at `outside_house.state`'s
+  position — it's a different spot in Pallet Town entirely, since it's a
+  different building. `wait_for_position_to_settle()` (already built for
+  the player's-house exit) was needed here again, for the same reason:
+  the game keeps auto-walking the player a couple more tiles on its own
+  right after the warp.
+- The gap in the hedge that actually leads to Route 1 is *not* a straight
+  line north from the lab's door — that column is blocked almost
+  immediately. The real gap sits further west (directly above Professor
+  Oak's own "Hey! Wait!" trigger tile from the starter-selection route),
+  and reaching it means walking *around* the lab building first. This was
+  found the same way every other coordinate in this project was found:
+  systematically testing which tiles allow movement in which direction,
+  one probe at a time, rather than guessing from a mental picture of the
+  map.
+
+The verified route is a straight sequence once known — right 4, up 10,
+left 6, up 3 — reliably taking the player from just outside the lab's
+door to standing in Route 1's tall grass (confirmed against the public
+[pret/pokered](https://github.com/pret/pokered) map-ID constants: map 12
+is Route 1). `src/controller.py`'s new **Segment 4** plays this out live
+after the rival battle is won, and `create_route1_entry_state.py` saves
+the result as `saves/route_1_entry.state`, the checkpoint the next
+milestone (actual Route 1 navigation) will start from.
 
 ### Scripting the missing middle route (`src/create_starter_obtained_state.py`)
 
@@ -369,18 +412,28 @@ Here's where this is headed, and why each step is designed the way it is.
    game's own automatic "step out of the doorway" animation to finish,
    instead of acting immediately, landed at the expected tile every
    time.)
-5. **Wild Pokemon encounters** are a different flavor of battle from the
+5. ~~Bridge from the won rival battle to Route 1's entrance.~~ **Done** —
+   see "Reaching Route 1" above. The controller now runs a fourth
+   segment, `bedroom.state` all the way to standing in Route 1's tall
+   grass, verified reliable across multiple runs.
+6. **Route 1 navigation** is next: teaching an agent to actually walk
+   Route 1 toward Viridian City, rather than a scripted route, following
+   the same pattern as the leave-house task (a small state space a
+   tabular Q-agent should handle fine) — but this time complicated by
+   wild Pokemon encounters interrupting movement at random.
+7. **Wild Pokemon encounters** are a different flavor of battle from the
    rival fight — the opponent varies, and unlike a rival fight you
    actually *can* run away — so they'll get their own environment variant
    rather than being forced into the current one. Until that exists, the
-   plan is for the future controller (item 4) to fall back to a simple
-   scripted "always use move 1" behavior for any battle type it doesn't
-   have a trained policy for yet (e.g. a wild encounter met while
-   navigating Route 1), just to survive it and resume navigation.
-6. **Later still**: healing strategy (when to retreat/heal rather than
-   push through a fight), and eventually eight badges and the Elite Four
-   — each one added only once the step before it is actually working, not
-   designed for prematurely.
+   plan is for the controller to fall back to a simple scripted "always
+   use move 1" behavior for any battle type it doesn't have a trained
+   policy for yet, just to survive it and resume navigation.
+8. **Later still**: healing strategy (when to retreat/heal rather than
+   push through a fight), Route 2/Viridian Forest/Pewter City, a new
+   battle environment trained specifically for Brock's Rock-type
+   Pokemon, and eventually eight badges and the Elite Four — each one
+   added only once the step before it is actually working, not designed
+   for prematurely.
 
 ## Try it yourself
 
@@ -407,6 +460,14 @@ POKEMON_AI_WINDOW_MODE=null python src/train_battle_agent.py
 
 # 6. Evaluate it over 100 battles
 POKEMON_AI_WINDOW_MODE=null python src/watch_battle_agent.py
+
+# 7. Play the trained DQN through the rival battle and on to Route 1's
+#    entrance, saving that checkpoint (needs models/rival_battle_dqn.zip
+#    from step 5)
+python src/create_route1_entry_state.py
+
+# 8. Or run the whole thing in one continuous session, bedroom to Route 1
+python src/controller.py
 ```
 
 The first time you run something that needs `saves/bedroom.state`, you'll

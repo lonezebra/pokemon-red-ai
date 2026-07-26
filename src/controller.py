@@ -8,6 +8,7 @@ code or its own separate emulator instance.
                    -> [scripted route]          -> Oak -> lab -> starter
                    -> [scripted route]          -> rival's trigger
                    -> [rival-battle DQN]        -> win/loss
+                   -> [scripted route]          -> Route 1's entrance
 
 Each learned skill (leave-house Q-agent, rival-battle DQN) is called
 through agents.skills' choose_action(observation) -> action interface, so
@@ -28,6 +29,15 @@ for position to stop changing on its own
 (controls.wait_for_position_to_settle) fixed it, and reliably lands at
 the same (5, 6) tile saves/outside_house.state represents -- exactly
 where the scripted route to Oak's trigger already assumes it starts.
+
+Getting from segment 3 to segment 4 needed the same treatment again:
+winning the rival battle doesn't return control immediately (more
+dialogue to clear first), and Oak's Lab's exit door is a different spot
+in Pallet Town than the player's own house's door -- so it needed its
+own wait_for_control_and_walk and wait_for_position_to_settle calls, and
+its own scripted route (found by systematically probing which tiles
+allowed movement) to the gap in the hedge that actually leads to Route 1.
+See create_route1_entry_state.py's module docstring for the details.
 
 Note: the individual Gymnasium environments (envs/simple_env.py,
 envs/battle_env.py) each create and own their own emulator, which is
@@ -52,6 +62,7 @@ from core.config import PROJECT_ROOT
 from rewards.leave_house_rewards import PALLET_TOWN_MAP_ID
 from create_starter_obtained_state import walk_to_oak_trigger, wait_for_lab_arrival, choose_starter
 from create_rival_battle_state import walk_to_rival_trigger_and_battle
+from create_route1_entry_state import walk_out_of_lab_and_up_to_route_1, ROUTE_1_MAP_ID
 
 
 def run_leave_house_segment(pyboy, max_steps=200):
@@ -170,6 +181,20 @@ def run_rival_battle_segment(pyboy, max_steps=30):
     return won
 
 
+def run_route1_entry_segment(pyboy):
+    print()
+    print("Segment 4: out of the lab -> Route 1's entrance")
+    print("-" * 62)
+
+    if not walk_out_of_lab_and_up_to_route_1(pyboy):
+        print("Warning: did not reach Route 1 as expected.")
+        return False
+
+    pos = get_player_position(pyboy)
+    print(f"Reached Route 1 (map {ROUTE_1_MAP_ID}) at {pos}.")
+    return True
+
+
 def main():
     print("Pokemon Red AI -- controller (one continuous run)")
 
@@ -180,6 +205,7 @@ def main():
     leave_house_ok = run_leave_house_segment(pyboy)
     starter_ok = run_starter_segment(pyboy) if leave_house_ok else False
     battle_ok = run_rival_battle_segment(pyboy) if starter_ok else False
+    route1_ok = run_route1_entry_segment(pyboy) if battle_ok else False
 
     pyboy.stop()
 
@@ -189,6 +215,7 @@ def main():
     print(f"Leave-house segment:  {'OK' if leave_house_ok else 'FAILED'}")
     print(f"Starter segment:      {'OK' if starter_ok else 'FAILED'}")
     print(f"Rival-battle segment: {'OK' if battle_ok else 'FAILED'}")
+    print(f"Route 1 entry segment: {'OK' if route1_ok else 'FAILED'}")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from core.config import SAVE_DIR, EMULATION_SPEED
 BEDROOM_STATE_PATH = SAVE_DIR / "bedroom.state"
 STARTER_OBTAINED_STATE_PATH = SAVE_DIR / "starter_obtained.state"
 RIVAL_BATTLE_STATE_PATH = SAVE_DIR / "rival_battle.state"
+ROUTE_1_ENTRY_STATE_PATH = SAVE_DIR / "route_1_entry.state"
 
 
 def load_bedroom_state(pyboy):
