@@ -191,3 +191,58 @@ def get_move_cursor_slot(pyboy):
             return slot
 
     return None
+
+
+# Randomizing the player's starting battle stats, so the battle DQN has
+# to generalize across different starter IV rolls instead of memorizing
+# one exact matchup.
+#
+# create_starter_obtained_state.py can't reproduce the exact same
+# Squirtle every run (see its module docstring) -- the hidden stats (IVs)
+# depend on RNG state at creation time. Generating several fresh starters
+# and reading their actual stats (rather than trusting a formula from
+# memory -- one guess was wrong by 1 point) gave the real range at level
+# 5:
+#
+#   HP/MaxHP: 19-20   Attack: 10-11   Defense: 11-13
+#   Speed: 9-10       Special: 10-11
+#
+# The enemy's stats, by contrast, were checked the same way and never
+# varied at all (always 20 HP, 10/10/10/12) across every regeneration --
+# trainer-owned Pokemon in Gen 1 have fixed IVs, unlike the player's own,
+# so only the player's stats need randomizing here.
+
+ADDR_BATTLE_MON_ATTACK = 0xD025
+ADDR_BATTLE_MON_DEFENSE = 0xD027
+ADDR_BATTLE_MON_SPEED = 0xD029
+ADDR_BATTLE_MON_SPECIAL = 0xD02B
+
+BATTLE_MON_STAT_RANGES = {
+    "hp": (19, 20),
+    "attack": (10, 11),
+    "defense": (11, 13),
+    "speed": (9, 10),
+    "special": (10, 11),
+}
+
+
+def write_u16(pyboy, addr, value):
+    pyboy.memory[addr] = (value >> 8) & 0xFF
+    pyboy.memory[addr + 1] = value & 0xFF
+
+
+def randomize_battle_mon_stats(pyboy, rng):
+    """
+    Roll new stats for the player's battle Pokemon within the range an
+    actual freshly-obtained level-5 Squirtle could have, then set current
+    HP to the (possibly new) max HP. `rng` is any object with `.randint`
+    (e.g. Python's `random` module, or a seeded `random.Random`).
+    """
+
+    max_hp = rng.randint(*BATTLE_MON_STAT_RANGES["hp"])
+    write_u16(pyboy, ADDR_BATTLE_MON_MAX_HP, max_hp)
+    write_u16(pyboy, ADDR_BATTLE_MON_HP, max_hp)
+    write_u16(pyboy, ADDR_BATTLE_MON_ATTACK, rng.randint(*BATTLE_MON_STAT_RANGES["attack"]))
+    write_u16(pyboy, ADDR_BATTLE_MON_DEFENSE, rng.randint(*BATTLE_MON_STAT_RANGES["defense"]))
+    write_u16(pyboy, ADDR_BATTLE_MON_SPEED, rng.randint(*BATTLE_MON_STAT_RANGES["speed"]))
+    write_u16(pyboy, ADDR_BATTLE_MON_SPECIAL, rng.randint(*BATTLE_MON_STAT_RANGES["special"]))

@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -5,8 +7,8 @@ from gymnasium import spaces
 from core.emulator import create_emulator, run_frames
 from core.state import load_state, RIVAL_BATTLE_STATE_PATH
 from core.controls import press_button, advance_battle_dialogue
-from core.memory import get_battle_state, get_move_cursor_slot
-from rewards.battle_rewards import calculate_battle_reward
+from core.memory import get_battle_state, get_move_cursor_slot, randomize_battle_mon_stats
+from rewards.battle_rewards import calculate_battle_reward, INVALID_MOVE_PENALTY
 
 
 NUM_MOVE_SLOTS = 4
@@ -27,16 +29,27 @@ class PokemonRedRivalBattleEnv(gym.Env):
 
     Observation: [your_hp_fraction, enemy_hp_fraction,
                   move1_valid, move2_valid, move3_valid, move4_valid]
+
+    randomize_stats=True (the default) rerolls the player's battle
+    Pokemon's stats within the real range a freshly-obtained starter can
+    have (see memory.randomize_battle_mon_stats) on every reset. This
+    matters because saves/rival_battle.state is only ever one exact IV
+    roll -- a policy trained/evaluated against just that one roll can
+    quietly learn to win *that* matchup specifically rather than a
+    genuinely good battle strategy. The enemy's stats aren't randomized:
+    checked empirically, a trainer's Pokemon has fixed IVs regardless of
+    how the encounter is regenerated, so there's nothing there to vary.
     """
 
     metadata = {"render_modes": []}
 
-    def __init__(self, max_steps=30):
+    def __init__(self, max_steps=30, randomize_stats=True):
         super().__init__()
 
         self.pyboy = create_emulator()
         self.max_steps = max_steps
         self.step_count = 0
+        self.randomize_stats = randomize_stats
 
         self.action_space = spaces.Discrete(NUM_MOVE_SLOTS)
         self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(6,), dtype=np.float32)
@@ -47,6 +60,9 @@ class PokemonRedRivalBattleEnv(gym.Env):
         load_state(self.pyboy, RIVAL_BATTLE_STATE_PATH)
         run_frames(self.pyboy, 10)
 
+        if self.randomize_stats:
+            randomize_battle_mon_stats(self.pyboy, random)
+
         self.step_count = 0
 
         state = get_battle_state(self.pyboy)
@@ -56,13 +72,26 @@ class PokemonRedRivalBattleEnv(gym.Env):
         before = get_battle_state(self.pyboy)
         valid_slots = self._valid_move_slots(before)
 
-        if action not in valid_slots:
-            after = before
-            reward = calculate_battle_reward(before, after, invalid_action=True)
-        else:
-            self._select_move(action)
-            after = get_battle_state(self.pyboy)
-            reward = calculate_battle_reward(before, after)
+        # Picking an invalid slot (unknown move, or 0 PP) still costs a
+        # penalty, but the environment substitutes the first valid move
+        # and actually plays it -- always making real progress. This
+        # matters: an earlier version left the game state completely
+        # unchanged on an invalid pick, which meant the observation
+        # never changed either. Once a trained policy's greedy choice
+        # for a given observation happened to be an invalid slot, it
+        # would deadlock forever repeating that same wrong pick, since
+        # nothing about the situation ever changed to make it choose
+        # differently. Found by tracing an evaluation episode that
+        # burned all 30 steps stuck at the same HP values.
+        chose_invalid_action = action not in valid_slots
+        actual_action = valid_slots[0] if chose_invalid_action else action
+
+        self._select_move(actual_action)
+        after = get_battle_state(self.pyboy)
+        reward = calculate_battle_reward(before, after)
+
+        if chose_invalid_action:
+            reward += INVALID_MOVE_PENALTY
 
         self.step_count += 1
 
@@ -73,6 +102,7 @@ class PokemonRedRivalBattleEnv(gym.Env):
             "before": before,
             "after": after,
             "valid_slots": valid_slots,
+            "chose_invalid_action": chose_invalid_action,
         }
 
         return self._observation(after), reward, terminated, truncated, info
