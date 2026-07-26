@@ -1,4 +1,4 @@
-from emulator import run_frames
+from core.emulator import run_frames
 
 
 VALID_BUTTONS = {
@@ -72,7 +72,7 @@ def walk_tile(pyboy, direction, max_hold_frames=60, settle_frames=20):
     if direction not in DIRECTION_BUTTONS:
         raise ValueError(f"Invalid walking direction: {direction}")
 
-    from memory import get_player_position
+    from core.memory import get_player_position
 
     before = get_player_position(pyboy)
 
@@ -146,7 +146,7 @@ def advance_battle_dialogue(pyboy, max_presses=60, hold_frames=10, release_frame
     position instead of trusting a fixed hold time.
     """
 
-    from memory import is_battle_menu_open, is_in_battle
+    from core.memory import is_battle_menu_open, is_in_battle
 
     for _ in range(max_presses):
         if is_battle_menu_open(pyboy) or not is_in_battle(pyboy):

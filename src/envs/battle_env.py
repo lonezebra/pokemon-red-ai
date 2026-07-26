@@ -2,11 +2,11 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from emulator import create_emulator, run_frames
-from state import load_state, RIVAL_BATTLE_STATE_PATH
-from controls import press_button, advance_battle_dialogue
-from memory import get_battle_state, get_move_cursor_slot
-from battle_rewards import calculate_battle_reward
+from core.emulator import create_emulator, run_frames
+from core.state import load_state, RIVAL_BATTLE_STATE_PATH
+from core.controls import press_button, advance_battle_dialogue
+from core.memory import get_battle_state, get_move_cursor_slot
+from rewards.battle_rewards import calculate_battle_reward
 
 
 NUM_MOVE_SLOTS = 4

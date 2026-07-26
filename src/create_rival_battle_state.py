@@ -1,8 +1,8 @@
-from emulator import create_emulator, run_frames
-from state import load_state, save_state, STARTER_OBTAINED_STATE_PATH, RIVAL_BATTLE_STATE_PATH
-from controls import press_button, walk_tile
-from memory import get_player_position, print_player_position
-from screen import save_screenshot
+from core.emulator import create_emulator, run_frames
+from core.state import load_state, save_state, STARTER_OBTAINED_STATE_PATH, RIVAL_BATTLE_STATE_PATH
+from core.controls import press_button, walk_tile
+from core.memory import get_player_position, print_player_position
+from core.screen import save_screenshot
 
 
 # Findings from probing this by hand, starting at starter_obtained.state

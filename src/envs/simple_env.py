@@ -1,9 +1,9 @@
-from emulator import create_emulator, run_frames
-from state import load_bedroom_state
-from controls import walk_tile
-from memory import get_player_position
+from core.emulator import create_emulator, run_frames
+from core.state import load_bedroom_state
+from core.controls import walk_tile
+from core.memory import get_player_position
 from actions import get_action_name, num_actions
-from rewards import calculate_leave_house_reward, position_key, PALLET_TOWN_MAP_ID
+from rewards.leave_house_rewards import calculate_leave_house_reward, position_key, PALLET_TOWN_MAP_ID
 
 
 class PokemonRedLeaveHouseEnv:

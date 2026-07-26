@@ -1,4 +1,4 @@
-from config import SAVE_DIR, EMULATION_SPEED
+from core.config import SAVE_DIR, EMULATION_SPEED
 
 
 BEDROOM_STATE_PATH = SAVE_DIR / "bedroom.state"

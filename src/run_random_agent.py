@@ -1,6 +1,6 @@
 import random
 
-from simple_env import PokemonRedLeaveHouseEnv
+from envs.simple_env import PokemonRedLeaveHouseEnv
 from actions import num_actions
 
 

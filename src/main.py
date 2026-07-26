@@ -1,6 +1,6 @@
-from emulator import create_emulator, run_frames
-from controls import press_button, press_sequence
-from screen import save_screenshot
+from core.emulator import create_emulator, run_frames
+from core.controls import press_button, press_sequence
+from core.screen import save_screenshot
 
 
 def main():

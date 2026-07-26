@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from config import SCREENSHOT_DIR
+from core.config import SCREENSHOT_DIR
 
 
 def save_screenshot(pyboy, filename=None):

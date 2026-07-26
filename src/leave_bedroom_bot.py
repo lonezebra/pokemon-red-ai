@@ -1,8 +1,8 @@
-from emulator import create_emulator, run_frames
-from controls import walk_tile
-from memory import get_player_position, print_player_position
-from screen import save_screenshot
-from state import load_bedroom_state
+from core.emulator import create_emulator, run_frames
+from core.controls import walk_tile
+from core.memory import get_player_position, print_player_position
+from core.screen import save_screenshot
+from core.state import load_bedroom_state
 
 
 BEDROOM_MAP_ID = 38

@@ -1,7 +1,7 @@
 from stable_baselines3 import DQN
 
-from battle_env import PokemonRedRivalBattleEnv
-from config import PROJECT_ROOT
+from envs.battle_env import PokemonRedRivalBattleEnv
+from core.config import PROJECT_ROOT
 
 MODEL_PATH = PROJECT_ROOT / "models" / "rival_battle_dqn.zip"
 
