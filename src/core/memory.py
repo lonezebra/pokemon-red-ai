@@ -58,6 +58,23 @@ ADDR_ENEMY_MON_MAX_HP = 0xCFF4
 ADDR_ENEMY_MON_MOVES = 0xCFED
 ADDR_ENEMY_MON_PP = 0xCFFE
 
+# Added for the wild-encounter milestone, needed because (unlike the
+# rival's fixed Squirtle-vs-Bulbasaur matchup) the opponent's species
+# actually varies. Species and level sit right before HP/MaxHP in the
+# same battle_struct layout as everything above -- verified directly
+# against a real Route 1 encounter, not just derived from the pattern:
+# walked into the grass until a battle triggered, advanced to the
+# FIGHT/PKMN/ITEM/RUN menu, and cross-checked these values against the
+# actual on-screen "PIDGEY :L3" / player ":L6" text and Squirtle sprite
+# (see src/create_wild_encounter_state.py). Species values are Gen 1's
+# internal index order, not the National Pokedex number -- confirmed:
+# 36 read here matched the on-screen PIDGEY, and Gen 1's internal index
+# table independently lists Pidgey at 36.
+ADDR_BATTLE_MON_SPECIES = 0xD014
+ADDR_BATTLE_MON_LEVEL = 0xD022
+ADDR_ENEMY_MON_SPECIES = 0xCFE5
+ADDR_ENEMY_MON_LEVEL = 0xCFF3
+
 
 def read_u16(pyboy, addr):
     """Read a big-endian 2-byte value."""
@@ -100,6 +117,27 @@ def get_enemy_mon_pp(pyboy):
     return [pyboy.memory[ADDR_ENEMY_MON_PP + i] for i in range(4)]
 
 
+def get_battle_mon_species(pyboy):
+    return pyboy.memory[ADDR_BATTLE_MON_SPECIES]
+
+
+def get_battle_mon_level(pyboy):
+    return pyboy.memory[ADDR_BATTLE_MON_LEVEL]
+
+
+def get_enemy_mon_species(pyboy):
+    return pyboy.memory[ADDR_ENEMY_MON_SPECIES]
+
+
+def get_enemy_mon_level(pyboy):
+    return pyboy.memory[ADDR_ENEMY_MON_LEVEL]
+
+
+def get_battle_type(pyboy):
+    """0 = not in battle, 1 = wild battle, 2 = trainer battle."""
+    return pyboy.memory[ADDR_IS_IN_BATTLE]
+
+
 def get_battle_state(pyboy):
     """
     Minimal battle observation: own/enemy HP, and enough move/PP info to
@@ -115,6 +153,23 @@ def get_battle_state(pyboy):
         "enemy_mon_hp": get_enemy_mon_hp(pyboy),
         "enemy_mon_max_hp": get_enemy_mon_max_hp(pyboy),
     }
+
+
+def get_wild_battle_state(pyboy):
+    """
+    Same as get_battle_state(), plus the fields that only matter once the
+    opponent isn't always the same fixed matchup: battle_type (to detect
+    a wild battle ending by the wild Pokemon fleeing, versus a real
+    win/loss), and both sides' species/level.
+    """
+
+    state = get_battle_state(pyboy)
+    state["battle_type"] = get_battle_type(pyboy)
+    state["battle_mon_species"] = get_battle_mon_species(pyboy)
+    state["battle_mon_level"] = get_battle_mon_level(pyboy)
+    state["enemy_mon_species"] = get_enemy_mon_species(pyboy)
+    state["enemy_mon_level"] = get_enemy_mon_level(pyboy)
+    return state
 
 
 def print_battle_state(pyboy, label="Battle state"):
