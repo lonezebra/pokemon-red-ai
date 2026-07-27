@@ -633,13 +633,38 @@ Here's where this is headed, and why each step is designed the way it is.
 9. ~~Route 2 navigation, this time from a properly verified
    checkpoint.~~ **Done** — see "Route 2 navigation" above. **50/50** in
    evaluation, a 41-step path every time.
-10. **Viridian Forest** is next: it sits behind the gate at map 50, and
-    is the first area that is a genuine maze rather than a corridor —
-    so the y-coordinate potential shaping that carried Route 1 straight
-    over to Route 2 probably will *not* transfer, and `survey_map()`
-    should be run on it early to find out what shape the problem
-    actually is before a reward function is designed for it.
-11. **Later still**: healing strategy (when to retreat/heal rather than
+10. **Viridian Forest is surveyed but blocked, and the survey is why we
+    know that.** Map 51, reached through the gate at map 50 (both now
+    verified rather than inferred from the map table). `survey_map()`
+    flood-filled it to completion: **676 reachable tiles**, filling only
+    **45% of its bounding box** — so it is a genuine maze, confirming
+    the y-coordinate shaping that carried Route 1 over to Route 2 would
+    *not* have transferred. But the more important result is that its
+    **only reachable exit leads back the way we came**. There is no way
+    north to Pewter City from where the agent currently stands.
+
+    That is the Route 22 situation exactly — a task whose goal cannot be
+    reached — except this time it cost about twenty minutes of surveying
+    instead of 1500 training episodes. Checked hard before trusting it,
+    since the negative result is the whole claim: the survey completed
+    with its frontier exhausted (not truncated), zero unfleeable battles
+    corrupted it, the entire northern tree line was confirmed solid both
+    visually and by interacting north from eight separate positions, and
+    400 steps of ordinary walking produced 9 wild battles and no trainer
+    battles.
+
+    What blocks it looks like the forest's trainers. Probing every
+    blocked direction found 72 that respond, several of them Bug
+    Catchers ("Hey, wait up!") standing at chokepoints. A trainer
+    occupies its tile, so pathfinding correctly reads it as a wall —
+    which means getting past them needs the ability to *win* a trainer
+    battle, since unlike a wild Pokemon a trainer cannot be fled.
+11. **Trainer battles** are therefore the real next milestone, and they
+    unblock two things at once: Viridian Forest, and Brock. The
+    rival-battle DQN already solves a fixed, unfleeable trainer fight,
+    so the work is generalizing it to varying opponents rather than
+    starting over.
+12. **Later still**: healing strategy (when to retreat/heal rather than
     push through a fight), Pewter City, a new battle environment
     trained specifically for Brock's Rock-type Pokemon, and eventually
     eight badges and the Elite Four — each one added only once the step
