@@ -166,6 +166,57 @@ def stitch_panorama(frames):
     return image, meta
 
 
+def largest_connected_component(mask):
+    """
+    Keeps only the largest 8-connected blob of True pixels in a 2D
+    boolean array, zeroing out everything else. Plain BFS rather than
+    reaching for scipy.ndimage.label -- the sprite mask is 16x16, so
+    there's no real cost to a from-scratch implementation here.
+
+    8-connected (not 4-connected) deliberately -- a first attempt at
+    4-connectivity trimmed the sprite's feet off, since they're only
+    diagonally connected to the body at this resolution.
+    """
+
+    visited = np.zeros_like(mask, dtype=bool)
+    best_component = None
+
+    for start_row in range(mask.shape[0]):
+        for start_col in range(mask.shape[1]):
+            if not mask[start_row, start_col] or visited[start_row, start_col]:
+                continue
+
+            component = []
+            queue = [(start_row, start_col)]
+            visited[start_row, start_col] = True
+
+            while queue:
+                row, col = queue.pop()
+                component.append((row, col))
+                for dr, dc in (
+                    (-1, 0), (1, 0), (0, -1), (0, 1),
+                    (-1, -1), (-1, 1), (1, -1), (1, 1),
+                ):
+                    nr, nc = row + dr, col + dc
+                    if (
+                        0 <= nr < mask.shape[0]
+                        and 0 <= nc < mask.shape[1]
+                        and mask[nr, nc]
+                        and not visited[nr, nc]
+                    ):
+                        visited[nr, nc] = True
+                        queue.append((nr, nc))
+
+            if best_component is None or len(component) > len(best_component):
+                best_component = component
+
+    result = np.zeros_like(mask, dtype=bool)
+    if best_component:
+        for row, col in best_component:
+            result[row, col] = True
+    return result
+
+
 def extract_player_sprite(frames, panorama, meta):
     """
     Produces a small reusable RGBA sprite asset (color = the live
@@ -197,7 +248,17 @@ def extract_player_sprite(frames, panorama, meta):
     )
 
     diff = np.abs(live.astype(int) - background.astype(int)).sum(axis=2)
-    alpha = np.where(diff > 30, 255, 0).astype(np.uint8)
+    raw_mask = diff > 30
+
+    # The diff picks up a few stray pixels scattered outside the sprite
+    # itself (sub-pixel misalignment between the live frame and the
+    # median-stacked panorama at this exact spot), which showed up as
+    # speckling once the sprite was actually visible in the mashup
+    # instead of a plain dot. The sprite itself is one solid connected
+    # shape, so keeping only the largest connected component of the mask
+    # drops that speckle without needing to hand-tune the diff threshold.
+    mask = largest_connected_component(raw_mask)
+    alpha = np.where(mask, 255, 0).astype(np.uint8)
 
     rgba = np.dstack([live, alpha])
     return Image.fromarray(rgba, mode="RGBA")

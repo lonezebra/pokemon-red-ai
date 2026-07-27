@@ -5,6 +5,7 @@ from PIL import Image
 
 from core.config import SCREENSHOT_DIR
 from core.screen import save_gif
+from build_route1_map import PLAYER_SPRITE_BOUNDS
 
 MAP_IMAGE_PATH = SCREENSHOT_DIR / "route1_map.png"
 MAP_META_PATH = SCREENSHOT_DIR / "route1_map_meta.json"
@@ -81,9 +82,24 @@ def build_canvas(meta, runs):
     paste_y = pad + (meta["min_y"] - min_y) * tile - pad
     base.paste(panorama, (paste_x, paste_y))
 
+    # The offset here is NOT tile//2 (the geometric tile center) -- it's
+    # where the player's own sprite actually renders within a captured
+    # frame (see build_route1_map.py's PLAYER_SPRITE_BOUNDS), i.e. where
+    # world tile (x, y) truly ends up in the panorama once that frame is
+    # pasted. Confirmed empirically, not assumed: cross-correlating two
+    # frames one tile apart showed the background shifts by exactly 16px
+    # per tile (the camera keeps the player at a fixed screen position),
+    # so "the current tile" always renders at the same frame-local pixel
+    # box regardless of which frame you look at. Using tile//2 instead
+    # placed sprites off by (sprite_center - 8) pixels from where their
+    # tile actually sits in the panorama -- visible as sprites appearing
+    # to walk through boulders/walls instead of the path between them.
+    sprite_center_x = (PLAYER_SPRITE_BOUNDS[0] + PLAYER_SPRITE_BOUNDS[2]) // 2
+    sprite_center_y = (PLAYER_SPRITE_BOUNDS[1] + PLAYER_SPRITE_BOUNDS[3]) // 2
+
     def to_pixel(x, y):
-        px = paste_x + pad + (x - meta["min_x"]) * tile + tile // 2
-        py = paste_y + pad + (y - meta["min_y"]) * tile + tile // 2
+        px = paste_x + pad + (x - meta["min_x"]) * tile + sprite_center_x
+        py = paste_y + pad + (y - meta["min_y"]) * tile + sprite_center_y
         return px, py
 
     return base, to_pixel
@@ -102,6 +118,11 @@ def main(run_label=None, duration_ms=60):
     base_canvas, to_pixel = build_canvas(meta, runs)
 
     base_sprite = Image.open(PLAYER_SPRITE_PATH).convert("RGBA")
+    # Upscaled 2x (nearest-neighbor, keeps the pixel-art edges crisp
+    # instead of blurring them) -- at native 16x16 the sprite reads as a
+    # tiny smudge next to the panorama's own tile art, especially once
+    # many overlap in a cluster.
+    base_sprite = base_sprite.resize((base_sprite.width * 2, base_sprite.height * 2), resample=Image.NEAREST)
     sprites = {
         "in_progress": tint_sprite(base_sprite, IN_PROGRESS_COLOR),
         "success": tint_sprite(base_sprite, SUCCESS_COLOR),
