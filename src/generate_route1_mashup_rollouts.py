@@ -31,7 +31,7 @@ def run_rollout(env, agent, max_steps):
     reached_goal = False
 
     for _ in range(max_steps):
-        action = agent.choose_action(obs, greedy=True)
+        action = agent.choose_action(obs, greedy=False)
         obs, _, done, info = env.step(action)
         positions.append((obs["x"], obs["y"]))
 
@@ -42,22 +42,25 @@ def run_rollout(env, agent, max_steps):
     return positions, reached_goal
 
 
+# Both the environment and (under greedy play) the policy are fully
+# deterministic, so a well-trained Q-table with few remaining ties
+# produces the exact same trajectory on every rollout -- confirmed
+# directly: 150 "greedy" rollouts against the first fully-trained
+# checkpoint came back bit-for-bit identical, making the mashup pointless.
+# A small fixed exploration rate instead keeps every rollout mostly
+# following the learned policy while still diverging enough to be worth
+# animating side by side.
+MASHUP_EPSILON = 0.15
+
+
 def main(num_runs=150, max_steps=300, run_label=None):
-    # greedy (not epsilon-random) action selection, same as
-    # watch_route1_agent.py -- this is meant to show what the agent has
-    # actually learned so far, not force extra exploration. Early in
-    # training the Q-table is still mostly empty/all-zero for unvisited
-    # states, so greedy ties are broken randomly anyway (see
-    # QLearningAgent.choose_action), which is exactly why 150 runs still
-    # produce visibly different paths instead of one line repeated 150
-    # times.
-    #
     # max_steps is capped lower than training's 800 -- this is purely for
     # keeping the mashup video-length/runtime reasonable, not related to
     # the actual training step budget.
     env = PokemonRedRoute1Env(max_steps=max_steps)
     agent = QLearningAgent(num_actions=num_actions())
     agent.load(MODEL_PATH)
+    agent.epsilon = MASHUP_EPSILON
 
     runs = []
     successes = 0
