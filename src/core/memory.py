@@ -76,9 +76,30 @@ ADDR_ENEMY_MON_SPECIES = 0xCFE5
 ADDR_ENEMY_MON_LEVEL = 0xCFF3
 
 
+# Bag contents. Stored as a count byte followed by (item id, quantity)
+# pairs. Verified empirically before being relied on: read as empty
+# standing outside the Viridian Mart, then read as exactly one entry --
+# item 70, quantity 1 -- the instant the Mart clerk's script handed over
+# Oak's Parcel, and empty again the instant Oak accepted it.
+ADDR_NUM_BAG_ITEMS = 0xD31D
+ADDR_BAG_ITEMS = 0xD31E
+MAX_BAG_ITEMS = 20
+
+OAKS_PARCEL_ITEM_ID = 70
+
+
 def read_u16(pyboy, addr):
     """Read a big-endian 2-byte value."""
     return (pyboy.memory[addr] << 8) | pyboy.memory[addr + 1]
+
+
+def get_bag_item_ids(pyboy):
+    count = min(pyboy.memory[ADDR_NUM_BAG_ITEMS], MAX_BAG_ITEMS)
+    return [pyboy.memory[ADDR_BAG_ITEMS + i * 2] for i in range(count)]
+
+
+def has_item(pyboy, item_id):
+    return item_id in get_bag_item_ids(pyboy)
 
 
 def is_in_battle(pyboy):
