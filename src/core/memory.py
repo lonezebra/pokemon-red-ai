@@ -176,12 +176,13 @@ def get_battle_state(pyboy):
     }
 
 
-def get_wild_battle_state(pyboy):
+def get_detailed_battle_state(pyboy):
     """
-    Same as get_battle_state(), plus the fields that only matter once the
-    opponent isn't always the same fixed matchup: battle_type (to detect
-    a wild battle ending by the wild Pokemon fleeing, versus a real
-    win/loss), and both sides' species/level.
+    Same as get_battle_state(), plus the fields that only matter once
+    the opponent is not always the same fixed matchup: battle_type
+    (wild vs trainer) and both sides' species/level. Species in
+    particular is what tells a trainer sending out a replacement --
+    enemy HP jumping back to full -- apart from healing.
     """
 
     state = get_battle_state(pyboy)

@@ -8,6 +8,11 @@ ROUTE_1_ENTRY_STATE_PATH = SAVE_DIR / "route_1_entry.state"
 
 WILD_ENCOUNTER_STATE_DIR = SAVE_DIR / "wild_encounters"
 
+# One state per distinct Viridian Forest trainer, each captured at the
+# first FIGHT/PKMN/ITEM/RUN menu of that battle -- the same "start of
+# episode" point every other battle state in this project uses.
+TRAINER_BATTLE_STATE_DIR = SAVE_DIR / "trainer_battles"
+
 
 def wild_encounter_state_path(species_id):
     # Named by Gen 1's internal species index (not the Pokedex number --
