@@ -137,6 +137,65 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
     return False
 
 
+def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES):
+    """
+    Exhaustively flood-fill the map the player is standing on, without
+    stepping off it, and report what is actually there:
+
+        tiles -- every reachable (x, y) on this map
+        exits -- {((x, y), direction): (map_id, x, y)} for each tile that
+                 leads somewhere else
+
+    If the search finishes before hitting `max_tiles`, the result is
+    complete: anything absent from `exits` genuinely is not reachable
+    from here. That is the whole point -- it is what turned "we never
+    found Viridian's north exit" into "Viridian has no north exit", and
+    the same distinction would have caught the Route 22 mix-up
+    immediately (a route with no forward exit is obvious in one survey,
+    but invisible across 1500 training episodes).
+
+    Leaves the player where they started.
+    """
+
+    origin = _snapshot(pyboy)
+    start = get_player_position(pyboy)
+    start_map = start["map_id"]
+    start_key = (start["x"], start["y"])
+
+    states = {start_key: origin}
+    tiles = {start_key}
+    exits = {}
+    queue = deque([start_key])
+
+    while queue and len(tiles) < max_tiles:
+        key = queue.popleft()
+
+        for direction in DIRECTIONS:
+            _restore(pyboy, states[key])
+            moved = _step(pyboy, direction)
+            position = get_player_position(pyboy)
+
+            if position["map_id"] != start_map:
+                exits[(key, direction)] = (
+                    position["map_id"],
+                    position["x"],
+                    position["y"],
+                )
+                continue
+            if not moved:
+                continue
+
+            next_key = (position["x"], position["y"])
+            if next_key not in tiles:
+                tiles.add(next_key)
+                states[next_key] = _snapshot(pyboy)
+                queue.append(next_key)
+
+    complete = not queue
+    _restore(pyboy, origin)
+    return tiles, exits, complete
+
+
 def walk_to_tile(pyboy, x, y, **kwargs):
     return walk_to(pyboy, lambda p: p["x"] == x and p["y"] == y, **kwargs)
 
