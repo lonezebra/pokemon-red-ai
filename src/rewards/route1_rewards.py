@@ -28,6 +28,17 @@ def calculate_route1_reward(before, after, visited_positions):
     attempting to run away -- so from this reward function's point of
     view, `before` and `after` are always overworld positions, never a
     battle state.
+
+    Discovered the hard way (a trained agent's greedy policy turned out
+    to walk straight back into Pallet Town on its very first move, then
+    stay there): the "new tile" bonus below didn't check *which* map the
+    new tile was on, so wandering backward into Pallet Town earned the
+    same +1.0 novelty reward as real forward progress on Route 1 --
+    an easier way to farm reward than pushing through Route 1's grass
+    toward a goal never yet reached. Route1Env now ends the episode the
+    moment the player leaves Route 1 backward (see reached_goal handling
+    there), and the big penalty below makes sure that ending reads as
+    unambiguously bad rather than just "no bonus this step."
     """
 
     reward = -0.01
@@ -40,10 +51,12 @@ def calculate_route1_reward(before, after, visited_positions):
     if not moved:
         reward -= 0.25
 
-    if after_key not in visited_positions:
+    if after["map_id"] == ROUTE_1_MAP_ID and after_key not in visited_positions:
         reward += 1.0
 
     if after["map_id"] == VIRIDIAN_CITY_MAP_ID:
         reward += 100.0
+    elif after["map_id"] not in (ROUTE_1_MAP_ID, VIRIDIAN_CITY_MAP_ID):
+        reward -= 20.0
 
     return reward

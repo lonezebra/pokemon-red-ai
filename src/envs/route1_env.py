@@ -3,7 +3,12 @@ from core.state import load_state, ROUTE_1_ENTRY_STATE_PATH
 from core.controls import walk_tile, attempt_run_from_wild_battle
 from core.memory import get_player_position, is_in_battle
 from actions import get_action_name, num_actions
-from rewards.route1_rewards import calculate_route1_reward, position_key, VIRIDIAN_CITY_MAP_ID
+from rewards.route1_rewards import (
+    calculate_route1_reward,
+    position_key,
+    ROUTE_1_MAP_ID,
+    VIRIDIAN_CITY_MAP_ID,
+)
 
 
 class PokemonRedRoute1Env:
@@ -72,9 +77,10 @@ class PokemonRedRoute1Env:
         self.step_count += 1
 
         reached_goal = after["map_id"] == VIRIDIAN_CITY_MAP_ID
+        left_route_1 = after["map_id"] not in (ROUTE_1_MAP_ID, VIRIDIAN_CITY_MAP_ID)
         ran_out_of_steps = self.step_count >= self.max_steps
 
-        done = reached_goal or ran_out_of_steps
+        done = reached_goal or left_route_1 or ran_out_of_steps
 
         info = {
             "moved": moved,
