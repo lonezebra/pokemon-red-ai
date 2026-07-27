@@ -66,12 +66,11 @@ class PokemonRedRoute1Env:
 
         after = get_player_position(self.pyboy)
 
-        reward = calculate_route1_reward(
-            before=before,
-            after=after,
-            visited_positions=self.visited_positions,
-        )
+        reward = calculate_route1_reward(before=before, after=after)
 
+        # No longer consulted by calculate_route1_reward() (see its
+        # docstring), but still tracked here for the tiles_visited count
+        # reported in demo/mashup output.
         self.visited_positions.add(position_key(after))
 
         self.step_count += 1

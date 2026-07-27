@@ -1,6 +1,12 @@
 ROUTE_1_MAP_ID = 12
 VIRIDIAN_CITY_MAP_ID = 1
 
+# The Route 1 entry state (saves/route_1_entry.state) starts at y=35;
+# Viridian City's entrance is reached around y=0. Used as the "worst
+# case" anchor for route1_potential() below when the player has left
+# Route 1 entirely (see there for why).
+ROUTE_1_START_Y = 35
+
 
 def position_key(position):
     return (
@@ -10,18 +16,40 @@ def position_key(position):
     )
 
 
-def calculate_route1_reward(before, after, visited_positions):
+def route1_potential(position):
+    """
+    A pure function of position, higher = closer to the goal, used for
+    potential-based reward shaping below. Route 1 is a mostly-vertical
+    corridor (confirmed by the mapping scout in build_route1_map.py:
+    entry at y=35, Viridian City's end at y=0), so y-coordinate alone is
+    a reasonable stand-in for "distance to the goal," without needing
+    real pathfinding.
+
+    Deliberately NOT defined in terms of Pallet Town's own y when the
+    player has left Route 1 backward -- Pallet Town (map_id 0) has its
+    own unrelated local (x, y) grid (a hard-learned lesson from the
+    Pallet Town reward-exploit bug), so using its y here would add a
+    shaping term based on essentially arbitrary numbers. Anchoring it to
+    the Route 1 starting potential instead means leaving the route
+    contributes no shaping bonus or penalty of its own -- the explicit
+    -20 in calculate_route1_reward already makes that outcome clearly
+    bad on its own.
+    """
+
+    if position["map_id"] == VIRIDIAN_CITY_MAP_ID:
+        return 0.0
+    if position["map_id"] == ROUTE_1_MAP_ID:
+        return -position["y"]
+
+    return -ROUTE_1_START_Y
+
+
+def calculate_route1_reward(before, after):
     """
     Reward function for the Route 1 navigation task.
 
     The goal is to reach Viridian City, map 1, starting from
-    saves/route_1_entry.state (Route 1, map 12). Same shape as the
-    leave-house reward (small step penalty, penalty for not moving,
-    reward for visiting a new tile, large reward for the goal) --
-    Route 1 is a much longer corridor than the bedroom-to-Pallet-Town
-    walk, but it's still fundamentally the same kind of task: get from
-    a known start to a known goal map, so the same design carries over
-    directly.
+    saves/route_1_entry.state (Route 1, map 12).
 
     Wild Pokemon encounters are handled by the environment itself before
     this function ever runs (see envs/route1_env.py), by automatically
@@ -29,16 +57,29 @@ def calculate_route1_reward(before, after, visited_positions):
     view, `before` and `after` are always overworld positions, never a
     battle state.
 
-    Discovered the hard way (a trained agent's greedy policy turned out
-    to walk straight back into Pallet Town on its very first move, then
-    stay there): the "new tile" bonus below didn't check *which* map the
-    new tile was on, so wandering backward into Pallet Town earned the
-    same +1.0 novelty reward as real forward progress on Route 1 --
-    an easier way to farm reward than pushing through Route 1's grass
-    toward a goal never yet reached. Route1Env now ends the episode the
-    moment the player leaves Route 1 backward (see reached_goal handling
-    there), and the big penalty below makes sure that ending reads as
-    unambiguously bad rather than just "no bonus this step."
+    This used to give +1.0 for visiting any tile not already in
+    `visited_positions` this episode. That turned out to have a subtle
+    problem going deeper than the earlier Pallet-Town exploit (see
+    ROUTE_1_START_Y's docstring and the git history for that one): since
+    `visited_positions` resets every episode, whether a given (state,
+    action) pair earned that bonus depended on each *episode's own*
+    visitation history, not on the game state alone -- the same
+    transition could be rewarded in one training episode and not in
+    another. Averaged tabularly over thousands of episodes, that's a
+    noisy, inconsistent target for Q-learning to fit, and it showed:
+    diagnosed directly by recording a full greedy playthrough of the
+    trained policy, which ran the entire 800-step budget but visited
+    only 24 distinct tiles, spending 777 of 801 steps revisiting
+    ground it had already covered -- a directionless revisit loop, not
+    genuine progress cut short by running out of steps.
+
+    Potential-based shaping (Ng, Harada & Russell 1999) fixes this: the
+    bonus below is `route1_potential(after) - route1_potential(before)`,
+    a plain function of position with no episode-local history involved,
+    so the same transition always earns the same shaping reward. It's
+    also a strictly stronger signal than the old bonus -- moving away
+    from the goal is now an explicit penalty (symmetric with the reward
+    for moving toward it), rather than merely forfeiting a bonus.
     """
 
     reward = -0.01
@@ -51,8 +92,7 @@ def calculate_route1_reward(before, after, visited_positions):
     if not moved:
         reward -= 0.25
 
-    if after["map_id"] == ROUTE_1_MAP_ID and after_key not in visited_positions:
-        reward += 1.0
+    reward += route1_potential(after) - route1_potential(before)
 
     if after["map_id"] == VIRIDIAN_CITY_MAP_ID:
         reward += 100.0
