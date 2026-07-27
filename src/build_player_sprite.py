@@ -6,9 +6,10 @@ from core.state import load_state
 from core.controls import walk_tile
 from core.config import PROJECT_ROOT, SCREENSHOT_DIR
 
-# One-off asset-generation tool: captures a small reusable RGBA cutout of
-# the player's own overworld sprite, for anything that wants to draw the
-# actual character rather than an abstract dot (see render_route1_mashup.py).
+# One-off asset-generation tool: captures small reusable RGBA cutouts of
+# the player's own overworld sprite, one per facing direction, for
+# anything that wants to draw the actual character rather than an
+# abstract dot (see render_route1_mashup.py).
 #
 # The overworld sprite is always drawn at this fixed 16x16 pixel box on
 # the 160x144 screen (the camera keeps the player centered) -- found
@@ -20,7 +21,11 @@ from core.config import PROJECT_ROOT, SCREENSHOT_DIR
 # offset, in an entirely different location than where this box was
 # first measured.
 PLAYER_SPRITE_BOUNDS = (63, 58, 79, 74)
-PLAYER_SPRITE_PATH = SCREENSHOT_DIR / "player_sprite.png"
+
+
+def sprite_path(direction):
+    return SCREENSHOT_DIR / f"player_sprite_{direction}.png"
+
 
 # Where the sprite gets captured from matters. Two real problems ruled
 # out Route 1's own entry point (the first location tried):
@@ -42,6 +47,28 @@ REFERENCE_WALK = ["down", "down", "down", "left", "left"]
 
 TILE = 16
 DIFF_THRESHOLD = 30
+
+# A single press doesn't just turn to face a new direction the way some
+# later-gen Pokemon games do -- tested directly (a 4-frame press toward
+# an unblocked direction still moved a full tile) -- so capturing each
+# facing direction means actually stepping that way, then stepping back
+# to the same base spot afterward (both to keep all four captures at one
+# consistent position, and to reveal the background hidden behind the
+# sprite: the camera's fixed 16px/tile shift means whatever was behind
+# the sprite in the "facing" frame is visible, unobscured, in the
+# "stepped back" frame, at a known pixel offset).
+OPPOSITE_DIRECTION = {"up": "down", "down": "up", "left": "right", "right": "left"}
+
+# How much each axis shifts (dx, dy) in the *background* when the player
+# steps in the opposite direction (i.e. steps back to the base spot) --
+# sign convention confirmed empirically while building the Route 1
+# panorama (stepping up shifted the background down by exactly 16px).
+BACKGROUND_SHIFT_FOR_STEP_BACK = {
+    "up": (0, 16),
+    "down": (0, -16),
+    "left": (16, 0),
+    "right": (-16, 0),
+}
 
 
 def largest_connected_component(mask):
@@ -95,15 +122,24 @@ def largest_connected_component(mask):
     return result
 
 
-def extract_player_sprite():
+def build_sprite(live_frame, shifted_frame, shift_dx, shift_dy):
+    sx0, sy0, sx1, sy1 = PLAYER_SPRITE_BOUNDS
+    live = live_frame[sy0:sy1, sx0:sx1]
+    background = shifted_frame[sy0 + shift_dy:sy1 + shift_dy, sx0 + shift_dx:sx1 + shift_dx]
+
+    diff = np.abs(live.astype(int) - background.astype(int)).sum(axis=2)
+    mask = largest_connected_component(diff > DIFF_THRESHOLD)
+    alpha = np.where(mask, 255, 0).astype(np.uint8)
+
+    return Image.fromarray(np.dstack([live, alpha]), mode="RGBA")
+
+
+def extract_player_sprites():
     """
-    Isolates the sprite from its background without needing a whole
-    player-free reference image (e.g. a stitched panorama): capture one
-    frame standing still, then one more frame after moving exactly one
-    tile. The camera's fixed 16px/tile shift means whatever was hidden
-    behind the sprite in the first frame is now visible, unobscured, at
-    a known offset in the second -- diffing the two isolates the sprite
-    pixels directly.
+    One sprite per facing direction: walk to the reference spot, then
+    for each direction, step that way (now facing it), capture, step
+    back to the same base spot (revealing the background), capture
+    again, and diff.
     """
 
     pyboy = create_emulator()
@@ -114,33 +150,32 @@ def extract_player_sprite():
         walk_tile(pyboy, direction, verbose=False)
         run_frames(pyboy, 10)
 
-    live_frame = np.array(pyboy.screen.image.convert("RGB"))
+    sprites = {}
 
-    walk_tile(pyboy, "right", verbose=False)
-    run_frames(pyboy, 10)
-    shifted_frame = np.array(pyboy.screen.image.convert("RGB"))
+    for direction in ["up", "down", "left", "right"]:
+        walk_tile(pyboy, direction, verbose=False)
+        run_frames(pyboy, 10)
+        live_frame = np.array(pyboy.screen.image.convert("RGB"))
+
+        step_back = OPPOSITE_DIRECTION[direction]
+        walk_tile(pyboy, step_back, verbose=False)
+        run_frames(pyboy, 10)
+        shifted_frame = np.array(pyboy.screen.image.convert("RGB"))
+
+        shift_dx, shift_dy = BACKGROUND_SHIFT_FOR_STEP_BACK[step_back]
+        sprites[direction] = build_sprite(live_frame, shifted_frame, shift_dx, shift_dy)
 
     pyboy.stop()
-
-    sx0, sy0, sx1, sy1 = PLAYER_SPRITE_BOUNDS
-    live = live_frame[sy0:sy1, sx0:sx1]
-    # moved right, so the background shifts left by one tile
-    background = shifted_frame[sy0:sy1, sx0 - TILE:sx1 - TILE]
-
-    diff = np.abs(live.astype(int) - background.astype(int)).sum(axis=2)
-    raw_mask = diff > DIFF_THRESHOLD
-    mask = largest_connected_component(raw_mask)
-    alpha = np.where(mask, 255, 0).astype(np.uint8)
-
-    rgba = np.dstack([live, alpha])
-    return Image.fromarray(rgba, mode="RGBA")
+    return sprites
 
 
 def main():
-    sprite = extract_player_sprite()
-    PLAYER_SPRITE_PATH.parent.mkdir(exist_ok=True)
-    sprite.save(PLAYER_SPRITE_PATH)
-    print(f"Saved {PLAYER_SPRITE_PATH}")
+    sprites = extract_player_sprites()
+    SCREENSHOT_DIR.mkdir(exist_ok=True)
+    for direction, sprite in sprites.items():
+        path = sprite_path(direction)
+        sprite.save(path)
+        print(f"Saved {path}")
 
 
 if __name__ == "__main__":
