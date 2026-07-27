@@ -429,6 +429,45 @@ movement at random.
   bit-for-bit identical, which is what prompted recording one in detail
   rather than trusting the aggregate numbers.
 
+### Wild Pokemon encounters (`src/rewards/wild_battle_rewards.py`, `src/envs/wild_battle_env.py`, `src/train_wild_battle_agent.py`, `src/watch_wild_battle_agent.py`)
+
+A different flavor of battle from the rival fight: the opponent's
+species varies, and unlike a rival fight, running away is actually
+legal — so this got its own environment rather than a mode of
+`battle_env.py`.
+
+- Two facts nothing in this project needed to read before: the enemy's
+  and player's species and level (`core/memory.py`). Verified directly
+  against a live Route 1 encounter before being trusted — walked into
+  the grass, advanced to the FIGHT/PKMN/ITEM/RUN menu, and cross-checked
+  the read values against the actual on-screen "PIDGEY :L3" text. Gen 1
+  stores species as an internal index, not the Pokedex number — reading
+  36 there and independently knowing Gen 1's internal index lists Pidgey
+  at 36 confirmed both the address and that assumption at once.
+- **`src/create_wild_encounter_state.py`** captures a training save state
+  for each *distinct* wild species Route 1 can produce, rather than one
+  fixed encounter — found both of the only two it has (Pidgey, Rattata).
+  `wild_battle_env.py` resets from one of these at random each episode,
+  the same opponent-variety problem this milestone exists to solve.
+- The environment adds one real new thing beyond the rival battle env's
+  design: a RUN action, attempted once per environment step rather than
+  auto-retried — a failed attempt is visible in the next observation, so
+  the agent decides for itself whether to try again or fight instead,
+  rather than a scripted retry loop deciding on its behalf. The reward
+  function correspondingly handles the battle ending with neither side's
+  HP at zero (the player fled, or the wild Pokemon fled on its own —
+  treated the same), rewarded less than a win so winning stays preferred
+  whenever it's actually achievable.
+- **Current result: 100/100 wins, 0 losses, 0 fled**, evaluated the same
+  way as the rival battle (100 greedy episodes). Route 1's actual wild
+  encounters (Pidgey/Rattata, level 2-3) are trivially weak against a
+  level 6 Squirtle, so this result mainly proves the infrastructure
+  (opponent variety, the run action, the reward shape) rather than
+  fight-or-flee judgment specifically — the agent never needed to flee
+  to win every time. That's an honest limitation, not a hidden one:
+  proving it can flee *well* needs a wild Pokemon actually worth
+  avoiding, which Route 1 alone doesn't provide.
+
 ### Scouting scripts (the scaffolding, not the destination)
 
 A handful of scripts were how the coordinates and routes above were
@@ -488,13 +527,11 @@ Here's where this is headed, and why each step is designed the way it is.
    Viridian City, rather than a scripted route.~~ **Done** — see "Route 1
    navigation" above. ~96-99% success rate, solving the route in as few
    as ~53 steps.
-7. **Wild Pokemon encounters** are next. They're a different flavor of battle from the
-   rival fight — the opponent varies, and unlike a rival fight you
-   actually *can* run away — so they'll get their own environment variant
-   rather than being forced into the current one. Until that exists, the
-   plan is for the controller to fall back to a simple scripted "always
-   use move 1" behavior for any battle type it doesn't have a trained
-   policy for yet, just to survive it and resume navigation.
+7. ~~Wild Pokemon encounters: a different flavor of battle from the rival
+   fight, since the opponent varies and running away is legal.~~ **Done**
+   — see "Wild Pokemon encounters" above. 100/100 wins evaluated against
+   Route 1's actual encounters, though genuine fight-or-flee judgment
+   isn't proven yet since nothing on Route 1 is worth fleeing from.
 8. **Later still**: healing strategy (when to retreat/heal rather than
    push through a fight), Route 2/Viridian Forest/Pewter City, a new
    battle environment trained specifically for Brock's Rock-type
