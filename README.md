@@ -468,6 +468,63 @@ legal — so this got its own environment rather than a mode of
   proving it can flee *well* needs a wild Pokemon actually worth
   avoiding, which Route 1 alone doesn't provide.
 
+### Oak's Parcel, and the road north (`src/core/pathfind.py`, `src/create_pokedex_obtained_state.py`, `src/create_route2_entry_state.py`)
+
+The most instructive mistake in this project so far, and the tooling
+built to make sure it doesn't happen again.
+
+**The mistake.** After Route 1 was solved, the next milestone was Route
+2. A biased random walk out of Viridian City reached a map, a screenshot
+confirmed it was real outdoor route terrain rather than a building
+interior, and it was labelled Route 2. A full navigation task was built
+on it and trained for 1500 episodes, which produced essentially nothing
+— exploration would improve for a while, then collapse. That looked
+exactly like the reward-shaping instability Route 1 had suffered, so the
+natural assumption was that it needed the same fix.
+
+It didn't. The map was **Route 22**, west of Viridian, which dead-ends
+at the Victory Road gate and its eight-badge check. The task had no
+reachable goal at all, so no reward function would ever have fixed it.
+The screenshot that "confirmed" the map only ever established it was *a*
+route, never *which* route — it felt like verification without testing
+the actual claim. Three checks settled it afterwards: exiting that map
+eastward lands at Viridian's far *west* edge (x=0); the map-ID table,
+anchored on two IDs this project had already verified independently
+(Oak's Lab 40, Route 1 12), puts Route 22 at 33; and its west end is a
+solid mountain wall.
+
+**The real blocker.** Viridian City's northern exit is closed until Oak's
+Parcel is delivered, and this project's controller skips that errand
+entirely (bedroom → lab → starter → rival → Route 1). Measured directly
+by flood-filling the city before and after running it:
+
+|        | reachable tiles | y range | exits north |
+|--------|-----------------|---------|-------------|
+| before | 500             | 4 – 35  | none        |
+| after  | 600             | 0 – 35  | (17,0) (18,0) (19,0) → map 13 |
+
+`create_pokedex_obtained_state.py` runs that errand — Mart, Parcel, back
+through Route 1 to Pallet Town, Oak, Pokédex — and
+`create_route2_entry_state.py` then reaches the genuine Route 2 (map 13,
+entered at its southern end around (7–9, 71)). Both track progress by
+reading the game rather than counting button presses: the Parcel is
+followed through the bag in memory, verified empty outside the Mart, one
+entry the moment the clerk hands it over, and empty again the moment Oak
+accepts it.
+
+- **`src/core/pathfind.py`** is the tooling half. Every route before this
+  was found by biased random walks with stuck-escape heuristics, which
+  are slow, seed-dependent, and — the real problem — cannot distinguish
+  "there is no path" from "the walk got unlucky". That ambiguity is
+  precisely what hid the Route 22 mistake for so long. This does a
+  breadth-first search over real save states instead, so exhausting the
+  frontier is a genuine proof of absence; it is what established that
+  Viridian had no northern exit at all. On success it *loads the
+  snapshot it found* rather than replaying the moves that got there,
+  because replaying can diverge — Route 1's grass interrupts steps with
+  wild encounters, and fleeing takes a different number of turns each
+  time.
+
 ### Scouting scripts (the scaffolding, not the destination)
 
 A handful of scripts were how the coordinates and routes above were
@@ -532,12 +589,22 @@ Here's where this is headed, and why each step is designed the way it is.
    — see "Wild Pokemon encounters" above. 100/100 wins evaluated against
    Route 1's actual encounters, though genuine fight-or-flee judgment
    isn't proven yet since nothing on Route 1 is worth fleeing from.
-8. **Later still**: healing strategy (when to retreat/heal rather than
-   push through a fight), Route 2/Viridian Forest/Pewter City, a new
-   battle environment trained specifically for Brock's Rock-type
-   Pokemon, and eventually eight badges and the Elite Four — each one
-   added only once the step before it is actually working, not designed
-   for prematurely.
+8. ~~Unblock the road north out of Viridian City.~~ **Done** — see
+   "Oak's Parcel, and the road north" above. Route 2 is now reachable
+   and `saves/route2_entry.state` exists.
+9. **Route 2 navigation** is next, and is the first task that starts
+   from a properly verified checkpoint: Route 2 is map 13, entered at
+   its southern end around (7-9, 71), running north toward Viridian
+   Forest. Being a tall vertical corridor, it looks like the same shape
+   as Route 1, so the potential-based shaping in
+   `rewards/route1_rewards.py` should carry over — but *which way is
+   forward* needs confirming first this time, not assuming.
+10. **Later still**: healing strategy (when to retreat/heal rather than
+    push through a fight), Viridian Forest/Pewter City, a new battle
+    environment trained specifically for Brock's Rock-type Pokemon, and
+    eventually eight badges and the Elite Four — each one added only
+    once the step before it is actually working, not designed for
+    prematurely.
 
 ## Try it yourself
 
