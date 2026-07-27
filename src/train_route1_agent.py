@@ -11,6 +11,7 @@ MODEL_PATH = PROJECT_ROOT / "models" / "route1_q_table.json"
 CHECKPOINT_PATH = PROJECT_ROOT / "models" / "route1_checkpoint.json"
 
 DEMO_MAX_FRAMES = 300
+WARM_START_EPSILON = 0.3
 
 
 def save_checkpoint(episode, agent, successes, best_steps, best_demo_key):
@@ -124,6 +125,18 @@ def main(num_episodes=1500, max_steps=800):
             f"Resuming from checkpoint: episode {checkpoint['episode']}, "
             f"epsilon={agent.epsilon:.3f}, successes so far: {successes}"
         )
+    elif MODEL_PATH.exists():
+        # A previous batch finished (no mid-run checkpoint left behind,
+        # see the cleanup at the end of this function) but its Q-table is
+        # still here. Warm-start this new batch from it rather than
+        # throwing away everything it already learned -- epsilon resets
+        # to WARM_START_EPSILON rather than either 1.0 (wasteful, ignores
+        # how much is already known) or wherever the last batch's decay
+        # ended up (too little exploration left to work through the
+        # instability that motivated running another batch).
+        agent.load(MODEL_PATH)
+        agent.epsilon = WARM_START_EPSILON
+        print(f"Warm-starting from existing Q-table at {MODEL_PATH}, epsilon={agent.epsilon:.3f}")
 
     for episode in range(start_episode, num_episodes + 1):
         obs = env.reset()
