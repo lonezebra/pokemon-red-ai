@@ -7,13 +7,25 @@ from core.screen import save_gif
 
 MAP_IMAGE_PATH = SCREENSHOT_DIR / "route1_map.png"
 MAP_META_PATH = SCREENSHOT_DIR / "route1_map_meta.json"
-ROLLOUTS_PATH = SCREENSHOT_DIR / "route1_mashup_rollouts.json"
+MASHUP_DIR = SCREENSHOT_DIR / "mashups"
 
 DOT_RADIUS = 3
 IN_PROGRESS_COLOR = (240, 220, 60)
 SUCCESS_COLOR = (60, 220, 90)
 UNFINISHED_COLOR = (230, 90, 60)
 BACKGROUND_COLOR = (30, 30, 30)
+
+
+def latest_run_label():
+    # Picks up the run generate_route1_mashup_rollouts.py just produced
+    # without needing any state passed explicitly between the two
+    # scripts -- convenient for the common case of running them back to
+    # back, one training milestone at a time.
+    run_dirs = [d for d in MASHUP_DIR.iterdir() if d.is_dir()]
+    if not run_dirs:
+        raise FileNotFoundError(f"No run folders found under {MASHUP_DIR}")
+
+    return max(run_dirs, key=lambda d: d.stat().st_mtime).name
 
 
 def build_canvas(meta, runs):
@@ -56,10 +68,13 @@ def build_canvas(meta, runs):
     return base, to_pixel
 
 
-def main(duration_ms=60):
+def main(run_label=None, duration_ms=60):
+    run_label = run_label or latest_run_label()
+    run_dir = MASHUP_DIR / run_label
+
     with open(MAP_META_PATH) as f:
         meta = json.load(f)
-    with open(ROLLOUTS_PATH) as f:
+    with open(run_dir / "route1_mashup_rollouts.json") as f:
         data = json.load(f)
 
     runs = data["runs"]
@@ -99,7 +114,7 @@ def main(duration_ms=60):
     successes = sum(1 for run in runs if run["reached_goal"])
     print(f"{successes}/{len(runs)} runs reached Viridian City")
 
-    save_gif(frames, "route1_mashup.gif", duration_ms=duration_ms)
+    save_gif(frames, f"mashups/{run_label}/route1_mashup.gif", duration_ms=duration_ms)
 
 
 if __name__ == "__main__":

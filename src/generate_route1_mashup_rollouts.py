@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from envs.route1_env import PokemonRedRoute1Env
 from agents.q_learning_agent import QLearningAgent
@@ -6,7 +7,22 @@ from actions import num_actions
 from core.config import PROJECT_ROOT
 
 MODEL_PATH = PROJECT_ROOT / "models" / "route1_q_table.json"
-OUTPUT_PATH = PROJECT_ROOT / "screenshots" / "route1_mashup_rollouts.json"
+CHECKPOINT_PATH = PROJECT_ROOT / "models" / "route1_checkpoint.json"
+MASHUP_DIR = PROJECT_ROOT / "screenshots" / "mashups"
+
+
+def default_run_label():
+    # Prefer naming the folder after how far training had actually gotten
+    # (e.g. "ep0500") so runs from different training milestones are easy
+    # to tell apart at a glance -- fall back to a timestamp if training
+    # already finished and cleaned up its checkpoint (see
+    # train_route1_agent.py's end-of-run cleanup).
+    if CHECKPOINT_PATH.exists():
+        with open(CHECKPOINT_PATH) as f:
+            episode = json.load(f)["episode"]
+        return f"ep{episode:04d}"
+
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def run_rollout(env, agent, max_steps):
@@ -26,7 +42,7 @@ def run_rollout(env, agent, max_steps):
     return positions, reached_goal
 
 
-def main(num_runs=150, max_steps=300):
+def main(num_runs=150, max_steps=300, run_label=None):
     # greedy (not epsilon-random) action selection, same as
     # watch_route1_agent.py -- this is meant to show what the agent has
     # actually learned so far, not force extra exploration. Early in
@@ -58,13 +74,17 @@ def main(num_runs=150, max_steps=300):
 
     env.close()
 
-    OUTPUT_PATH.parent.mkdir(exist_ok=True)
-    with open(OUTPUT_PATH, "w") as f:
+    run_label = run_label or default_run_label()
+    run_dir = MASHUP_DIR / run_label
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = run_dir / "route1_mashup_rollouts.json"
+    with open(output_path, "w") as f:
         json.dump({"runs": runs, "max_steps": max_steps}, f)
 
     print()
     print(f"Total: {successes}/{num_runs} reached Viridian City")
-    print(f"Saved {len(runs)} rollouts to {OUTPUT_PATH}")
+    print(f"Saved {len(runs)} rollouts to {output_path}")
 
 
 if __name__ == "__main__":
