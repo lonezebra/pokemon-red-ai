@@ -36,6 +36,14 @@ STRIP_HEIGHT = 200  # bounds memory during the median stack, regardless of map s
 
 MAP_IMAGE_PATH = SCREENSHOT_DIR / "route1_map.png"
 MAP_META_PATH = SCREENSHOT_DIR / "route1_map_meta.json"
+PLAYER_SPRITE_PATH = SCREENSHOT_DIR / "route1_player_sprite.png"
+
+# The overworld player sprite is always drawn at this fixed 16x16 pixel
+# box on the 160x144 screen (the camera keeps the player centered,
+# except right at a map edge) -- found empirically by cropping a
+# candidate region from a still screenshot and adjusting until it framed
+# the sprite exactly, not derived from any documented constant.
+PLAYER_SPRITE_BOUNDS = (63, 58, 79, 74)
 
 # Weighted toward "up" (the direction that makes progress toward
 # Viridian City), with enough randomness in every direction that the
@@ -158,6 +166,43 @@ def stitch_panorama(frames):
     return image, meta
 
 
+def extract_player_sprite(frames, panorama, meta):
+    """
+    Produces a small reusable RGBA sprite asset (color = the live
+    grayscale pixel values, alpha = a mask marking which pixels are
+    actually the sprite) by diffing the very first captured frame
+    (the player standing still at the Route 1 entry position, before
+    any movement) against the *same* location in the already-built,
+    player-free panorama -- median-stacking across many overlapping
+    frames during stitch_panorama() already erased the player from the
+    background, so whatever differs between the two at this one spot
+    must be the sprite itself, not terrain.
+
+    This is inherently an approximation good for one location's terrain
+    (grass here), reused as a stencil everywhere else regardless of what
+    the agent is actually standing on in the mashup -- a deliberate
+    "good enough for a fun visualization" tradeoff, not a claim of
+    pixel-perfect compositing everywhere.
+    """
+
+    entry_x, entry_y, entry_frame = frames[0]
+    sx0, sy0, sx1, sy1 = PLAYER_SPRITE_BOUNDS
+
+    live = np.array(entry_frame.crop((sx0, sy0, sx1, sy1)))
+
+    origin_x = PAD + (entry_x - meta["min_x"]) * TILE
+    origin_y = PAD + (entry_y - meta["min_y"]) * TILE
+    background = np.array(
+        panorama.crop((origin_x + sx0, origin_y + sy0, origin_x + sx1, origin_y + sy1))
+    )
+
+    diff = np.abs(live.astype(int) - background.astype(int)).sum(axis=2)
+    alpha = np.where(diff > 30, 255, 0).astype(np.uint8)
+
+    rgba = np.dstack([live, alpha])
+    return Image.fromarray(rgba, mode="RGBA")
+
+
 def main():
     print("Scouting Route 1...")
     frames = scout_route1()
@@ -172,6 +217,10 @@ def main():
 
     print(f"Saved {MAP_IMAGE_PATH} ({image.size[0]}x{image.size[1]})")
     print(f"Saved {MAP_META_PATH}: {meta}")
+
+    sprite = extract_player_sprite(frames, image, meta)
+    sprite.save(PLAYER_SPRITE_PATH)
+    print(f"Saved {PLAYER_SPRITE_PATH}")
 
 
 if __name__ == "__main__":

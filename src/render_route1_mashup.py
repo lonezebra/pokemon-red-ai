@@ -1,15 +1,16 @@
 import json
 
-from PIL import Image, ImageDraw
+import numpy as np
+from PIL import Image
 
 from core.config import SCREENSHOT_DIR
 from core.screen import save_gif
 
 MAP_IMAGE_PATH = SCREENSHOT_DIR / "route1_map.png"
 MAP_META_PATH = SCREENSHOT_DIR / "route1_map_meta.json"
+PLAYER_SPRITE_PATH = SCREENSHOT_DIR / "route1_player_sprite.png"
 MASHUP_DIR = SCREENSHOT_DIR / "mashups"
 
-DOT_RADIUS = 3
 IN_PROGRESS_COLOR = (240, 220, 60)
 SUCCESS_COLOR = (60, 220, 90)
 UNFINISHED_COLOR = (230, 90, 60)
@@ -26,6 +27,26 @@ def latest_run_label():
         raise FileNotFoundError(f"No run folders found under {MASHUP_DIR}")
 
     return max(run_dirs, key=lambda d: d.stat().st_mtime).name
+
+
+def tint_sprite(sprite, color):
+    """
+    Recolors the (grayscale, since the Game Boy has no color) player
+    sprite by scaling each channel of the target color by the sprite's
+    own per-pixel brightness -- keeps the original shading (the cap's
+    outline stays dark, highlights stay bright) while giving each outcome
+    category a distinct, recognizable color. Pixels the sprite's alpha
+    mask marks as background stay fully transparent.
+    """
+
+    arr = np.array(sprite).astype(float)
+    rgb, alpha = arr[:, :, :3], arr[:, :, 3]
+
+    intensity = rgb.mean(axis=2, keepdims=True) / 255.0
+    tinted_rgb = intensity * np.array(color, dtype=float)
+
+    tinted = np.dstack([tinted_rgb, alpha]).astype(np.uint8)
+    return Image.fromarray(tinted, mode="RGBA")
 
 
 def build_canvas(meta, runs):
@@ -80,12 +101,19 @@ def main(run_label=None, duration_ms=60):
     runs = data["runs"]
     base_canvas, to_pixel = build_canvas(meta, runs)
 
+    base_sprite = Image.open(PLAYER_SPRITE_PATH).convert("RGBA")
+    sprites = {
+        "in_progress": tint_sprite(base_sprite, IN_PROGRESS_COLOR),
+        "success": tint_sprite(base_sprite, SUCCESS_COLOR),
+        "unfinished": tint_sprite(base_sprite, UNFINISHED_COLOR),
+    }
+    sprite_w, sprite_h = base_sprite.size
+
     max_len = max(len(run["positions"]) for run in runs)
     frames = []
 
     for t in range(max_len):
         frame = base_canvas.copy()
-        draw = ImageDraw.Draw(frame)
 
         for run in runs:
             positions = run["positions"]
@@ -93,18 +121,17 @@ def main(run_label=None, duration_ms=60):
             x, y = positions[idx]
 
             # Color by outcome only once a run has actually stopped
-            # moving -- while still walking, every dot is the same
+            # moving -- while still walking, every sprite is the same
             # in-progress color regardless of how it'll end.
             if t < len(positions) - 1:
-                color = IN_PROGRESS_COLOR
+                sprite = sprites["in_progress"]
             else:
-                color = SUCCESS_COLOR if run["reached_goal"] else UNFINISHED_COLOR
+                sprite = sprites["success"] if run["reached_goal"] else sprites["unfinished"]
 
-            px, py = to_pixel(x, y)
-            draw.ellipse(
-                (px - DOT_RADIUS, py - DOT_RADIUS, px + DOT_RADIUS, py + DOT_RADIUS),
-                fill=color,
-            )
+            center_x, center_y = to_pixel(x, y)
+            paste_x = center_x - sprite_w // 2
+            paste_y = center_y - sprite_h // 2
+            frame.paste(sprite, (paste_x, paste_y), sprite)
 
         frames.append(frame)
 
