@@ -1,9 +1,52 @@
+import math
+
 from envs.route1_env import PokemonRedRoute1Env
 from agents.q_learning_agent import QLearningAgent
 from actions import num_actions
 from core.config import PROJECT_ROOT
+from core.screen import save_gif
 
 MODEL_PATH = PROJECT_ROOT / "models" / "route1_q_table.json"
+
+DEMO_MAX_FRAMES = 300
+
+
+def run_demo_episode(env, agent, max_steps):
+    """
+    Play one greedy (no exploration) episode with the agent's current
+    Q-table, capturing a screenshot after every step, so training
+    progress can actually be watched instead of just read as numbers --
+    this session runs headless (no display attached to stream a live
+    window), so a GIF stitched from captured frames is the closest
+    substitute available.
+
+    Frames are subsampled evenly down to DEMO_MAX_FRAMES if the episode
+    runs long, so a slow, unsuccessful early episode doesn't produce an
+    enormous GIF.
+    """
+
+    obs = env.reset()
+    frames = [env.pyboy.screen.image.copy()]
+    info = {}
+
+    for _ in range(max_steps):
+        action = agent.choose_action(obs, greedy=True)
+        obs, reward, done, info = env.step(action)
+        frames.append(env.pyboy.screen.image.copy())
+
+        if done:
+            break
+
+    if len(frames) > DEMO_MAX_FRAMES:
+        stride = math.ceil(len(frames) / DEMO_MAX_FRAMES)
+        frames = frames[::stride]
+
+    return {
+        "frames": frames,
+        "reached_goal": info.get("reached_goal", False),
+        "tiles_visited": len(env.visited_positions),
+        "steps": info.get("step_count", 0),
+    }
 
 
 def main(num_episodes=1500, max_steps=800):
@@ -25,6 +68,12 @@ def main(num_episodes=1500, max_steps=800):
 
     successes = 0
     best_steps = None
+
+    # "Best so far" is ranked by whether the demo reached Viridian City at
+    # all first, then by how many distinct tiles it discovered along the
+    # way (more of the map explored), then by fewer steps as a tiebreak --
+    # matching what's actually interesting to see, not just raw reward.
+    best_demo_key = None
 
     for episode in range(1, num_episodes + 1):
         obs = env.reset()
@@ -57,6 +106,21 @@ def main(num_episodes=1500, max_steps=800):
                 f"successes so far: {successes}/{episode}  "
                 f"last reward: {total_reward:.2f}"
             )
+
+        if episode % 100 == 0:
+            demo = run_demo_episode(env, agent, max_steps)
+            save_gif(demo["frames"], f"route1_progress_ep{episode:04d}.gif")
+
+            demo_key = (demo["reached_goal"], demo["tiles_visited"], -demo["steps"])
+            print(
+                f"  [demo] reached_goal={demo['reached_goal']} "
+                f"tiles_visited={demo['tiles_visited']} steps={demo['steps']}"
+            )
+
+            if best_demo_key is None or demo_key > best_demo_key:
+                best_demo_key = demo_key
+                save_gif(demo["frames"], "route1_best_so_far.gif")
+                print(f"  [demo] new best so far (episode {episode})")
 
     print()
     print(f"Total successes: {successes}/{num_episodes}")
