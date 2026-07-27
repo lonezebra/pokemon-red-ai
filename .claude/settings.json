@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source .venv/bin/activate)",
+      "Bash(grep -n *)",
+      "Bash(git status)",
+      "Bash(ps aux)",
+      "mcp__github__pull_request_read"
+    ]
+  }
+}
