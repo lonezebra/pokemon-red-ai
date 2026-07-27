@@ -468,6 +468,44 @@ legal — so this got its own environment rather than a mode of
   proving it can flee *well* needs a wild Pokemon actually worth
   avoiding, which Route 1 alone doesn't provide.
 
+### Route 2 navigation (`src/rewards/route2_rewards.py`, `src/envs/route2_env.py`, `src/train_route2_agent.py`, `src/watch_route2_agent.py`)
+
+The same kind of task as Route 1, and deliberately the first one where
+both ends were established *before* any training ran — because the
+previous attempt at "Route 2" was trained for 1500 episodes against a
+route that had no reachable goal at all (see the section above).
+
+`core.pathfind.survey_map()` flood-filled Route 2 and finished with its
+frontier exhausted at 244 tiles, so this exit list is complete rather
+than whatever a random walk happened to stumble into:
+
+| From | Direction | Leads to |
+|------|-----------|----------|
+| (7,71) (8,71) (9,71) | down | map 1 — back to Viridian City |
+| **(3,44)** | **up** | **map 50 — Viridian Forest south gate** |
+
+Exactly one forward exit, which settled two things at once. `reached_goal`
+could name map 50 specifically, rather than the previous task's vague
+"any map that isn't this one" (which had counted walking through a
+building door as a win). And entry at y=71 against a goal at y=44 fixed
+*which direction is forward* — decreasing y, the same orientation as
+Route 1 — so Route 1's `-y` potential shaping carried over unchanged, as
+a verified fact rather than an assumption.
+
+**Current result: 50/50 in evaluation, taking exactly 41 steps every
+time** — a fully deterministic path, against a theoretical minimum of 27
+tiles of vertical progress. It converged on the first attempt, reaching
+98%+ per-round success by round 15 and holding there, with the greedy
+policy solving the route from round 1 onward. The contrast with the
+Route 22 attempt is the entire lesson: identical algorithm, identical
+reward shaping, and the only thing that changed was checking the goal
+was reachable first.
+
+Also adds **`src/train_navigation_parallel.py`**, a route-agnostic
+version of the Route 1 parallel trainer — environment, model paths and
+GIF names are parameters — so Viridian Forest and whatever follows don't
+each need another copy of the loop.
+
 ### Oak's Parcel, and the road north (`src/core/pathfind.py`, `src/create_pokedex_obtained_state.py`, `src/create_route2_entry_state.py`)
 
 The most instructive mistake in this project so far, and the tooling
@@ -592,19 +630,20 @@ Here's where this is headed, and why each step is designed the way it is.
 8. ~~Unblock the road north out of Viridian City.~~ **Done** — see
    "Oak's Parcel, and the road north" above. Route 2 is now reachable
    and `saves/route2_entry.state` exists.
-9. **Route 2 navigation** is next, and is the first task that starts
-   from a properly verified checkpoint: Route 2 is map 13, entered at
-   its southern end around (7-9, 71), running north toward Viridian
-   Forest. Being a tall vertical corridor, it looks like the same shape
-   as Route 1, so the potential-based shaping in
-   `rewards/route1_rewards.py` should carry over — but *which way is
-   forward* needs confirming first this time, not assuming.
-10. **Later still**: healing strategy (when to retreat/heal rather than
-    push through a fight), Viridian Forest/Pewter City, a new battle
-    environment trained specifically for Brock's Rock-type Pokemon, and
-    eventually eight badges and the Elite Four — each one added only
-    once the step before it is actually working, not designed for
-    prematurely.
+9. ~~Route 2 navigation, this time from a properly verified
+   checkpoint.~~ **Done** — see "Route 2 navigation" above. **50/50** in
+   evaluation, a 41-step path every time.
+10. **Viridian Forest** is next: it sits behind the gate at map 50, and
+    is the first area that is a genuine maze rather than a corridor —
+    so the y-coordinate potential shaping that carried Route 1 straight
+    over to Route 2 probably will *not* transfer, and `survey_map()`
+    should be run on it early to find out what shape the problem
+    actually is before a reward function is designed for it.
+11. **Later still**: healing strategy (when to retreat/heal rather than
+    push through a fight), Pewter City, a new battle environment
+    trained specifically for Brock's Rock-type Pokemon, and eventually
+    eight badges and the Elite Four — each one added only once the step
+    before it is actually working, not designed for prematurely.
 
 ## Try it yourself
 
