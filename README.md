@@ -361,6 +361,74 @@ memory, which turned out to be slightly wrong) also showed the enemy's
 stats never vary at all — Gen 1 trainer Pokemon have fixed IVs — so only
 the player's side needed this.
 
+### Route 1 navigation (`src/rewards/route1_rewards.py`, `src/envs/route1_env.py`, `src/train_route1_agent.py`, `src/train_route1_agent_parallel.py`)
+
+Teaching an agent to actually walk Route 1 to Viridian City, rather than
+following a scripted route — the same tabular Q-learning approach as the
+leave-house task, since the state space (`map_id`, `x`, `y`) is still just
+three numbers, but complicated by wild Pokemon encounters interrupting
+movement at random.
+
+- `envs/route1_env.py` handles wild encounters automatically (always
+  attempts to run — unlike the rival fight, running from a wild Pokemon is
+  always legal) so the task the agent actually has to learn stays just
+  navigation. Battling wild Pokemon is its own later milestone, not this
+  one's.
+- Two real problems surfaced only by actually evaluating the trained
+  policy, not trusting the training-time success counter:
+  - **The reward function accidentally rewarded farming Pallet Town.** The
+    "+1 for a new tile" bonus didn't check *which* map the new tile was
+    on, so a trained agent's very first greedy move turned out to warp
+    backward into Pallet Town and just stay there, earning the same
+    novelty reward exploring Pallet Town as it would for real Route 1
+    progress — an easier way to rack up reward than pushing toward a goal
+    it had never once reached. Fixed two ways: `route1_env.py` now ends
+    the episode the instant the player leaves Route 1 backward, and the
+    reward function gives an explicit -20 penalty for that outcome
+    instead of just withholding the bonus.
+  - **Even after that fix, the trained policy converged to a
+    directionless revisit loop, not real progress.** Confirmed directly:
+    a full greedy playthrough ran the entire 800-step budget but visited
+    only 24 distinct tiles, spending 777 of 801 steps revisiting ground
+    already covered. The deeper cause: the per-episode novelty bonus
+    depended on each *episode's own* visitation history
+    (`visited_positions` resets every `reset()`), so the same (state,
+    action) pair could be rewarded in one training episode and not
+    another — a noisy, inconsistent target for tabular Q-learning, which
+    assumes reward is a function of state alone. Replaced with
+    **potential-based reward shaping** (Ng, Harada & Russell 1999):
+    `route1_potential(position) = -y` on Route 1 (a mostly-vertical
+    corridor — y=35 at the entrance, y=0 at Viridian City's end), a pure
+    function of position with no episode-history dependence. Moving away
+    from the goal is now an explicit penalty, not just a forfeited bonus.
+- **Current result: ~96-99% success rate**, converging within about 15
+  rounds of training and staying stable afterward — unlike the earlier
+  reward scheme, which never once reached the goal across thousands of
+  episodes, and whose apparent exploration progress would regress rather
+  than hold. The learned policy solves the route in as few as ~53 steps,
+  well under the ~670-step reference from an early up-biased random-walk
+  scout (that scout was never trying to be efficient, just thorough).
+- **`src/train_route1_agent_parallel.py`**: this container has 4 CPU
+  cores, and PyBoy training is CPU-bound C code that threads can't help
+  with past the GIL. This runs training as independent worker processes
+  instead — each with its own emulator instance, all starting from the
+  same shared Q-table each round, training independently, then merged
+  back together by averaging every (state, action) value the workers
+  actually have an opinion on. Roughly 4x the throughput of the
+  single-process version, with the same episode/checkpoint crash-recovery
+  guarantee.
+- **`src/build_route1_map.py`, `src/generate_route1_mashup_rollouts.py`,
+  `src/render_route1_mashup.py`**: a "run mashup" visualization — stitches
+  a real panorama of Route 1 from actual screen captures (median-stacked
+  across many overlapping frames to erase the moving player sprite,
+  leaving just the static terrain), then overlays many independent
+  rollouts of the trained agent moving simultaneously across it, colored
+  by outcome. Mostly a fun/diagnostic side project, but it's what actually
+  surfaced the revisit-loop bug above in the first place — 150 "greedy"
+  rollouts against the first fully-trained checkpoint came back
+  bit-for-bit identical, which is what prompted recording one in detail
+  rather than trusting the aggregate numbers.
+
 ### Scouting scripts (the scaffolding, not the destination)
 
 A handful of scripts were how the coordinates and routes above were
@@ -416,12 +484,11 @@ Here's where this is headed, and why each step is designed the way it is.
    see "Reaching Route 1" above. The controller now runs a fourth
    segment, `bedroom.state` all the way to standing in Route 1's tall
    grass, verified reliable across multiple runs.
-6. **Route 1 navigation** is next: teaching an agent to actually walk
-   Route 1 toward Viridian City, rather than a scripted route, following
-   the same pattern as the leave-house task (a small state space a
-   tabular Q-agent should handle fine) — but this time complicated by
-   wild Pokemon encounters interrupting movement at random.
-7. **Wild Pokemon encounters** are a different flavor of battle from the
+6. ~~Route 1 navigation: teach an agent to actually walk Route 1 toward
+   Viridian City, rather than a scripted route.~~ **Done** — see "Route 1
+   navigation" above. ~96-99% success rate, solving the route in as few
+   as ~53 steps.
+7. **Wild Pokemon encounters** are next. They're a different flavor of battle from the
    rival fight — the opponent varies, and unlike a rival fight you
    actually *can* run away — so they'll get their own environment variant
    rather than being forced into the current one. Until that exists, the
