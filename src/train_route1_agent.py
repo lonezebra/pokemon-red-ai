@@ -1,3 +1,4 @@
+import json
 import math
 
 from envs.route1_env import PokemonRedRoute1Env
@@ -7,8 +8,42 @@ from core.config import PROJECT_ROOT
 from core.screen import save_gif
 
 MODEL_PATH = PROJECT_ROOT / "models" / "route1_q_table.json"
+CHECKPOINT_PATH = PROJECT_ROOT / "models" / "route1_checkpoint.json"
 
 DEMO_MAX_FRAMES = 300
+
+
+def save_checkpoint(episode, agent, successes, best_steps, best_demo_key):
+    # A container restart mid-training (this has actually happened once
+    # already) would otherwise lose every episode of progress, since
+    # QLearningAgent.save() only stores the Q-table itself, not epsilon
+    # or where training had gotten to. This sidecar file captures just
+    # enough to resume training as if it had never stopped, rather than
+    # restarting from episode 1 with epsilon back at 1.0.
+    with open(CHECKPOINT_PATH, "w") as f:
+        json.dump(
+            {
+                "episode": episode,
+                "epsilon": agent.epsilon,
+                "successes": successes,
+                "best_steps": best_steps,
+                "best_demo_key": list(best_demo_key) if best_demo_key is not None else None,
+            },
+            f,
+        )
+
+
+def load_checkpoint():
+    if not CHECKPOINT_PATH.exists():
+        return None
+
+    with open(CHECKPOINT_PATH) as f:
+        data = json.load(f)
+
+    if data["best_demo_key"] is not None:
+        data["best_demo_key"] = tuple(data["best_demo_key"])
+
+    return data
 
 
 def run_demo_episode(env, agent, max_steps):
@@ -75,7 +110,22 @@ def main(num_episodes=1500, max_steps=800):
     # matching what's actually interesting to see, not just raw reward.
     best_demo_key = None
 
-    for episode in range(1, num_episodes + 1):
+    start_episode = 1
+
+    checkpoint = load_checkpoint()
+    if checkpoint is not None and MODEL_PATH.exists():
+        agent.load(MODEL_PATH)
+        agent.epsilon = checkpoint["epsilon"]
+        successes = checkpoint["successes"]
+        best_steps = checkpoint["best_steps"]
+        best_demo_key = checkpoint["best_demo_key"]
+        start_episode = checkpoint["episode"] + 1
+        print(
+            f"Resuming from checkpoint: episode {checkpoint['episode']}, "
+            f"epsilon={agent.epsilon:.3f}, successes so far: {successes}"
+        )
+
+    for episode in range(start_episode, num_episodes + 1):
         obs = env.reset()
         total_reward = 0.0
         info = {}
@@ -122,6 +172,9 @@ def main(num_episodes=1500, max_steps=800):
                 save_gif(demo["frames"], "route1_best_so_far.gif")
                 print(f"  [demo] new best so far (episode {episode})")
 
+            agent.save(MODEL_PATH)
+            save_checkpoint(episode, agent, successes, best_steps, best_demo_key)
+
     print()
     print(f"Total successes: {successes}/{num_episodes}")
     if best_steps is not None:
@@ -129,6 +182,11 @@ def main(num_episodes=1500, max_steps=800):
 
     agent.save(MODEL_PATH)
     print(f"Saved Q-table to {MODEL_PATH}")
+
+    # Training finished normally -- remove the checkpoint so a future
+    # fresh run doesn't mistake this completed run for one to resume.
+    if CHECKPOINT_PATH.exists():
+        CHECKPOINT_PATH.unlink()
 
     env.close()
 
