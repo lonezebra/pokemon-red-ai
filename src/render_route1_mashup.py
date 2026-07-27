@@ -5,11 +5,10 @@ from PIL import Image
 
 from core.config import SCREENSHOT_DIR
 from core.screen import save_gif
-from build_route1_map import PLAYER_SPRITE_BOUNDS
+from build_player_sprite import PLAYER_SPRITE_BOUNDS, PLAYER_SPRITE_PATH
 
 MAP_IMAGE_PATH = SCREENSHOT_DIR / "route1_map.png"
 MAP_META_PATH = SCREENSHOT_DIR / "route1_map_meta.json"
-PLAYER_SPRITE_PATH = SCREENSHOT_DIR / "route1_player_sprite.png"
 MASHUP_DIR = SCREENSHOT_DIR / "mashups"
 
 IN_PROGRESS_COLOR = (240, 220, 60)

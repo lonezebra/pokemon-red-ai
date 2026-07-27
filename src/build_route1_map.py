@@ -36,14 +36,6 @@ STRIP_HEIGHT = 200  # bounds memory during the median stack, regardless of map s
 
 MAP_IMAGE_PATH = SCREENSHOT_DIR / "route1_map.png"
 MAP_META_PATH = SCREENSHOT_DIR / "route1_map_meta.json"
-PLAYER_SPRITE_PATH = SCREENSHOT_DIR / "route1_player_sprite.png"
-
-# The overworld player sprite is always drawn at this fixed 16x16 pixel
-# box on the 160x144 screen (the camera keeps the player centered,
-# except right at a map edge) -- found empirically by cropping a
-# candidate region from a still screenshot and adjusting until it framed
-# the sprite exactly, not derived from any documented constant.
-PLAYER_SPRITE_BOUNDS = (63, 58, 79, 74)
 
 # Weighted toward "up" (the direction that makes progress toward
 # Viridian City), with enough randomness in every direction that the
@@ -166,104 +158,6 @@ def stitch_panorama(frames):
     return image, meta
 
 
-def largest_connected_component(mask):
-    """
-    Keeps only the largest 8-connected blob of True pixels in a 2D
-    boolean array, zeroing out everything else. Plain BFS rather than
-    reaching for scipy.ndimage.label -- the sprite mask is 16x16, so
-    there's no real cost to a from-scratch implementation here.
-
-    8-connected (not 4-connected) deliberately -- a first attempt at
-    4-connectivity trimmed the sprite's feet off, since they're only
-    diagonally connected to the body at this resolution.
-    """
-
-    visited = np.zeros_like(mask, dtype=bool)
-    best_component = None
-
-    for start_row in range(mask.shape[0]):
-        for start_col in range(mask.shape[1]):
-            if not mask[start_row, start_col] or visited[start_row, start_col]:
-                continue
-
-            component = []
-            queue = [(start_row, start_col)]
-            visited[start_row, start_col] = True
-
-            while queue:
-                row, col = queue.pop()
-                component.append((row, col))
-                for dr, dc in (
-                    (-1, 0), (1, 0), (0, -1), (0, 1),
-                    (-1, -1), (-1, 1), (1, -1), (1, 1),
-                ):
-                    nr, nc = row + dr, col + dc
-                    if (
-                        0 <= nr < mask.shape[0]
-                        and 0 <= nc < mask.shape[1]
-                        and mask[nr, nc]
-                        and not visited[nr, nc]
-                    ):
-                        visited[nr, nc] = True
-                        queue.append((nr, nc))
-
-            if best_component is None or len(component) > len(best_component):
-                best_component = component
-
-    result = np.zeros_like(mask, dtype=bool)
-    if best_component:
-        for row, col in best_component:
-            result[row, col] = True
-    return result
-
-
-def extract_player_sprite(frames, panorama, meta):
-    """
-    Produces a small reusable RGBA sprite asset (color = the live
-    grayscale pixel values, alpha = a mask marking which pixels are
-    actually the sprite) by diffing the very first captured frame
-    (the player standing still at the Route 1 entry position, before
-    any movement) against the *same* location in the already-built,
-    player-free panorama -- median-stacking across many overlapping
-    frames during stitch_panorama() already erased the player from the
-    background, so whatever differs between the two at this one spot
-    must be the sprite itself, not terrain.
-
-    This is inherently an approximation good for one location's terrain
-    (grass here), reused as a stencil everywhere else regardless of what
-    the agent is actually standing on in the mashup -- a deliberate
-    "good enough for a fun visualization" tradeoff, not a claim of
-    pixel-perfect compositing everywhere.
-    """
-
-    entry_x, entry_y, entry_frame = frames[0]
-    sx0, sy0, sx1, sy1 = PLAYER_SPRITE_BOUNDS
-
-    live = np.array(entry_frame.crop((sx0, sy0, sx1, sy1)))
-
-    origin_x = PAD + (entry_x - meta["min_x"]) * TILE
-    origin_y = PAD + (entry_y - meta["min_y"]) * TILE
-    background = np.array(
-        panorama.crop((origin_x + sx0, origin_y + sy0, origin_x + sx1, origin_y + sy1))
-    )
-
-    diff = np.abs(live.astype(int) - background.astype(int)).sum(axis=2)
-    raw_mask = diff > 30
-
-    # The diff picks up a few stray pixels scattered outside the sprite
-    # itself (sub-pixel misalignment between the live frame and the
-    # median-stacked panorama at this exact spot), which showed up as
-    # speckling once the sprite was actually visible in the mashup
-    # instead of a plain dot. The sprite itself is one solid connected
-    # shape, so keeping only the largest connected component of the mask
-    # drops that speckle without needing to hand-tune the diff threshold.
-    mask = largest_connected_component(raw_mask)
-    alpha = np.where(mask, 255, 0).astype(np.uint8)
-
-    rgba = np.dstack([live, alpha])
-    return Image.fromarray(rgba, mode="RGBA")
-
-
 def main():
     print("Scouting Route 1...")
     frames = scout_route1()
@@ -278,10 +172,6 @@ def main():
 
     print(f"Saved {MAP_IMAGE_PATH} ({image.size[0]}x{image.size[1]})")
     print(f"Saved {MAP_META_PATH}: {meta}")
-
-    sprite = extract_player_sprite(frames, image, meta)
-    sprite.save(PLAYER_SPRITE_PATH)
-    print(f"Saved {PLAYER_SPRITE_PATH}")
 
 
 if __name__ == "__main__":
