@@ -201,3 +201,39 @@ def advance_battle_dialogue(pyboy, max_presses=60, hold_frames=10, release_frame
         press_button(pyboy, "a", hold_frames=hold_frames, release_frames=release_frames)
 
     return is_battle_menu_open(pyboy) or not is_in_battle(pyboy)
+
+
+def attempt_run_from_wild_battle(pyboy, max_attempts=10):
+    """
+    Try to flee a wild battle by selecting RUN from the FIGHT/PKMN/ITEM/RUN
+    menu, retrying if a flee attempt fails (Gen 1 run success depends on
+    a speed comparison against the wild Pokemon, so it isn't guaranteed
+    on the first try).
+
+    The main battle menu is a 2x2 grid with the cursor starting on FIGHT
+    (top-left) every time it opens: FIGHT/PKMN on top, ITEM/RUN on the
+    bottom. Pressing down then right moves the cursor from FIGHT to RUN,
+    confirmed by reading the window tilemap's cursor-arrow position
+    before and after each press rather than assuming the layout. Returns
+    True once the battle has actually ended (is_in_battle is False), or
+    False if it's still ongoing after max_attempts.
+
+    Unused for the rival battle (running from a Gen 1 trainer battle is
+    not possible), but wild encounters -- e.g. while navigating Route 1
+    -- are exactly the case this project's design notes call out as
+    "the AI needs to learn when to run."
+    """
+
+    from core.memory import is_in_battle
+
+    for _ in range(max_attempts):
+        advance_battle_dialogue(pyboy)
+        if not is_in_battle(pyboy):
+            return True
+
+        press_button(pyboy, "down", hold_frames=10, release_frames=15)
+        press_button(pyboy, "right", hold_frames=10, release_frames=15)
+        press_button(pyboy, "a", hold_frames=10, release_frames=15)
+        run_frames(pyboy, 20)
+
+    return not is_in_battle(pyboy)

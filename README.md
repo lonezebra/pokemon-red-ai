@@ -101,9 +101,10 @@ directly (kept flat in `src/` so every command below stays simple —
 - **`src/core/state.py`** saves and loads PyBoy save states — snapshots of
   the entire game at one instant. Several exist now, each captured at a
   meaningful checkpoint: standing in the bedroom, standing outside the
-  house, arriving at Oak's Lab, having just picked a starter Pokemon, and
-  the moment the first rival battle begins. Resetting to any of these
-  takes about a second, instead of replaying everything before it.
+  house, arriving at Oak's Lab, having just picked a starter Pokemon, the
+  moment the first rival battle begins, and standing in Route 1's tall
+  grass just after winning that battle. Resetting to any of these takes
+  about a second, instead of replaying everything before it.
 - **`src/core/screen.py`** saves a screenshot of the current game screen.
   Used throughout for visually double-checking that a script (or a memory
   reading) actually reflects what's really happening on screen.
@@ -238,13 +239,15 @@ that ran without crashing:
 
 This is the payoff the whole project has been building toward: **one
 continuous run**, from waking up in the bedroom all the way to beating
-the rival, with no manual save-state hand-offs in the middle.
+the rival and stepping into Route 1, with no manual save-state hand-offs
+in the middle.
 
 ```
 bedroom.state -> [leave-house Q-agent] -> Pallet Town
               -> [scripted route]      -> Oak -> lab -> choose Squirtle
               -> [scripted route]      -> rival's trigger
               -> [rival-battle DQN]    -> win
+              -> [scripted route]      -> Route 1's entrance
 ```
 
 - **`src/agents/skills.py`** wraps each trained skill behind the exact
@@ -270,6 +273,46 @@ don't guess" idea as everywhere else in this project — and reliably
 lands at the exact tile `saves/outside_house.state` represents, which is
 where the scripted route to Oak's trigger already assumes it starts.
 Verified reliable across multiple full runs, bedroom to battle won.
+
+### Reaching Route 1 (`src/create_route1_entry_state.py`)
+
+Winning the rival battle isn't the end of the road — the controller now
+carries on one segment further, out of Oak's Lab and up to the edge of
+Route 1, the path toward Viridian City and, eventually, Brock.
+
+Finding this route needed real investigation, not just chaining known
+pieces together, because two assumptions turned out to be wrong:
+
+- Winning the battle doesn't hand control back immediately — there's a
+  post-battle dialogue sequence to clear first (Blue reacting to the
+  loss), the same "press A, then test for real movement, stop the
+  instant it works" pattern used everywhere else in this project for
+  dialogue-then-movement handoffs.
+- Oak's Lab has its *own* exit door, separate from the player's house.
+  Walking out of it does not land you back at `outside_house.state`'s
+  position — it's a different spot in Pallet Town entirely, since it's a
+  different building. `wait_for_position_to_settle()` (already built for
+  the player's-house exit) was needed here again, for the same reason:
+  the game keeps auto-walking the player a couple more tiles on its own
+  right after the warp.
+- The gap in the hedge that actually leads to Route 1 is *not* a straight
+  line north from the lab's door — that column is blocked almost
+  immediately. The real gap sits further west (directly above Professor
+  Oak's own "Hey! Wait!" trigger tile from the starter-selection route),
+  and reaching it means walking *around* the lab building first. This was
+  found the same way every other coordinate in this project was found:
+  systematically testing which tiles allow movement in which direction,
+  one probe at a time, rather than guessing from a mental picture of the
+  map.
+
+The verified route is a straight sequence once known — right 4, up 10,
+left 6, up 3 — reliably taking the player from just outside the lab's
+door to standing in Route 1's tall grass (confirmed against the public
+[pret/pokered](https://github.com/pret/pokered) map-ID constants: map 12
+is Route 1). `src/controller.py`'s new **Segment 4** plays this out live
+after the rival battle is won, and `create_route1_entry_state.py` saves
+the result as `saves/route_1_entry.state`, the checkpoint the next
+milestone (actual Route 1 navigation) will start from.
 
 ### Scripting the missing middle route (`src/create_starter_obtained_state.py`)
 
@@ -317,6 +360,170 @@ reading their actual stats (rather than trusting a stat formula from
 memory, which turned out to be slightly wrong) also showed the enemy's
 stats never vary at all — Gen 1 trainer Pokemon have fixed IVs — so only
 the player's side needed this.
+
+### Route 1 navigation (`src/rewards/route1_rewards.py`, `src/envs/route1_env.py`, `src/train_route1_agent.py`, `src/train_route1_agent_parallel.py`)
+
+Teaching an agent to actually walk Route 1 to Viridian City, rather than
+following a scripted route — the same tabular Q-learning approach as the
+leave-house task, since the state space (`map_id`, `x`, `y`) is still just
+three numbers, but complicated by wild Pokemon encounters interrupting
+movement at random.
+
+- `envs/route1_env.py` handles wild encounters automatically (always
+  attempts to run — unlike the rival fight, running from a wild Pokemon is
+  always legal) so the task the agent actually has to learn stays just
+  navigation. Battling wild Pokemon is its own later milestone, not this
+  one's.
+- Two real problems surfaced only by actually evaluating the trained
+  policy, not trusting the training-time success counter:
+  - **The reward function accidentally rewarded farming Pallet Town.** The
+    "+1 for a new tile" bonus didn't check *which* map the new tile was
+    on, so a trained agent's very first greedy move turned out to warp
+    backward into Pallet Town and just stay there, earning the same
+    novelty reward exploring Pallet Town as it would for real Route 1
+    progress — an easier way to rack up reward than pushing toward a goal
+    it had never once reached. Fixed two ways: `route1_env.py` now ends
+    the episode the instant the player leaves Route 1 backward, and the
+    reward function gives an explicit -20 penalty for that outcome
+    instead of just withholding the bonus.
+  - **Even after that fix, the trained policy converged to a
+    directionless revisit loop, not real progress.** Confirmed directly:
+    a full greedy playthrough ran the entire 800-step budget but visited
+    only 24 distinct tiles, spending 777 of 801 steps revisiting ground
+    already covered. The deeper cause: the per-episode novelty bonus
+    depended on each *episode's own* visitation history
+    (`visited_positions` resets every `reset()`), so the same (state,
+    action) pair could be rewarded in one training episode and not
+    another — a noisy, inconsistent target for tabular Q-learning, which
+    assumes reward is a function of state alone. Replaced with
+    **potential-based reward shaping** (Ng, Harada & Russell 1999):
+    `route1_potential(position) = -y` on Route 1 (a mostly-vertical
+    corridor — y=35 at the entrance, y=0 at Viridian City's end), a pure
+    function of position with no episode-history dependence. Moving away
+    from the goal is now an explicit penalty, not just a forfeited bonus.
+- **Current result: ~96-99% success rate**, converging within about 15
+  rounds of training and staying stable afterward — unlike the earlier
+  reward scheme, which never once reached the goal across thousands of
+  episodes, and whose apparent exploration progress would regress rather
+  than hold. The learned policy solves the route in as few as ~53 steps,
+  well under the ~670-step reference from an early up-biased random-walk
+  scout (that scout was never trying to be efficient, just thorough).
+- **`src/train_route1_agent_parallel.py`**: this container has 4 CPU
+  cores, and PyBoy training is CPU-bound C code that threads can't help
+  with past the GIL. This runs training as independent worker processes
+  instead — each with its own emulator instance, all starting from the
+  same shared Q-table each round, training independently, then merged
+  back together by averaging every (state, action) value the workers
+  actually have an opinion on. Roughly 4x the throughput of the
+  single-process version, with the same episode/checkpoint crash-recovery
+  guarantee.
+- **`src/build_route1_map.py`, `src/generate_route1_mashup_rollouts.py`,
+  `src/render_route1_mashup.py`**: a "run mashup" visualization — stitches
+  a real panorama of Route 1 from actual screen captures (median-stacked
+  across many overlapping frames to erase the moving player sprite,
+  leaving just the static terrain), then overlays many independent
+  rollouts of the trained agent moving simultaneously across it, colored
+  by outcome. Mostly a fun/diagnostic side project, but it's what actually
+  surfaced the revisit-loop bug above in the first place — 150 "greedy"
+  rollouts against the first fully-trained checkpoint came back
+  bit-for-bit identical, which is what prompted recording one in detail
+  rather than trusting the aggregate numbers.
+
+### Wild Pokemon encounters (`src/rewards/wild_battle_rewards.py`, `src/envs/wild_battle_env.py`, `src/train_wild_battle_agent.py`, `src/watch_wild_battle_agent.py`)
+
+A different flavor of battle from the rival fight: the opponent's
+species varies, and unlike a rival fight, running away is actually
+legal — so this got its own environment rather than a mode of
+`battle_env.py`.
+
+- Two facts nothing in this project needed to read before: the enemy's
+  and player's species and level (`core/memory.py`). Verified directly
+  against a live Route 1 encounter before being trusted — walked into
+  the grass, advanced to the FIGHT/PKMN/ITEM/RUN menu, and cross-checked
+  the read values against the actual on-screen "PIDGEY :L3" text. Gen 1
+  stores species as an internal index, not the Pokedex number — reading
+  36 there and independently knowing Gen 1's internal index lists Pidgey
+  at 36 confirmed both the address and that assumption at once.
+- **`src/create_wild_encounter_state.py`** captures a training save state
+  for each *distinct* wild species Route 1 can produce, rather than one
+  fixed encounter — found both of the only two it has (Pidgey, Rattata).
+  `wild_battle_env.py` resets from one of these at random each episode,
+  the same opponent-variety problem this milestone exists to solve.
+- The environment adds one real new thing beyond the rival battle env's
+  design: a RUN action, attempted once per environment step rather than
+  auto-retried — a failed attempt is visible in the next observation, so
+  the agent decides for itself whether to try again or fight instead,
+  rather than a scripted retry loop deciding on its behalf. The reward
+  function correspondingly handles the battle ending with neither side's
+  HP at zero (the player fled, or the wild Pokemon fled on its own —
+  treated the same), rewarded less than a win so winning stays preferred
+  whenever it's actually achievable.
+- **Current result: 100/100 wins, 0 losses, 0 fled**, evaluated the same
+  way as the rival battle (100 greedy episodes). Route 1's actual wild
+  encounters (Pidgey/Rattata, level 2-3) are trivially weak against a
+  level 6 Squirtle, so this result mainly proves the infrastructure
+  (opponent variety, the run action, the reward shape) rather than
+  fight-or-flee judgment specifically — the agent never needed to flee
+  to win every time. That's an honest limitation, not a hidden one:
+  proving it can flee *well* needs a wild Pokemon actually worth
+  avoiding, which Route 1 alone doesn't provide.
+
+### Oak's Parcel, and the road north (`src/core/pathfind.py`, `src/create_pokedex_obtained_state.py`, `src/create_route2_entry_state.py`)
+
+The most instructive mistake in this project so far, and the tooling
+built to make sure it doesn't happen again.
+
+**The mistake.** After Route 1 was solved, the next milestone was Route
+2. A biased random walk out of Viridian City reached a map, a screenshot
+confirmed it was real outdoor route terrain rather than a building
+interior, and it was labelled Route 2. A full navigation task was built
+on it and trained for 1500 episodes, which produced essentially nothing
+— exploration would improve for a while, then collapse. That looked
+exactly like the reward-shaping instability Route 1 had suffered, so the
+natural assumption was that it needed the same fix.
+
+It didn't. The map was **Route 22**, west of Viridian, which dead-ends
+at the Victory Road gate and its eight-badge check. The task had no
+reachable goal at all, so no reward function would ever have fixed it.
+The screenshot that "confirmed" the map only ever established it was *a*
+route, never *which* route — it felt like verification without testing
+the actual claim. Three checks settled it afterwards: exiting that map
+eastward lands at Viridian's far *west* edge (x=0); the map-ID table,
+anchored on two IDs this project had already verified independently
+(Oak's Lab 40, Route 1 12), puts Route 22 at 33; and its west end is a
+solid mountain wall.
+
+**The real blocker.** Viridian City's northern exit is closed until Oak's
+Parcel is delivered, and this project's controller skips that errand
+entirely (bedroom → lab → starter → rival → Route 1). Measured directly
+by flood-filling the city before and after running it:
+
+|        | reachable tiles | y range | exits north |
+|--------|-----------------|---------|-------------|
+| before | 500             | 4 – 35  | none        |
+| after  | 600             | 0 – 35  | (17,0) (18,0) (19,0) → map 13 |
+
+`create_pokedex_obtained_state.py` runs that errand — Mart, Parcel, back
+through Route 1 to Pallet Town, Oak, Pokédex — and
+`create_route2_entry_state.py` then reaches the genuine Route 2 (map 13,
+entered at its southern end around (7–9, 71)). Both track progress by
+reading the game rather than counting button presses: the Parcel is
+followed through the bag in memory, verified empty outside the Mart, one
+entry the moment the clerk hands it over, and empty again the moment Oak
+accepts it.
+
+- **`src/core/pathfind.py`** is the tooling half. Every route before this
+  was found by biased random walks with stuck-escape heuristics, which
+  are slow, seed-dependent, and — the real problem — cannot distinguish
+  "there is no path" from "the walk got unlucky". That ambiguity is
+  precisely what hid the Route 22 mistake for so long. This does a
+  breadth-first search over real save states instead, so exhausting the
+  frontier is a genuine proof of absence; it is what established that
+  Viridian had no northern exit at all. On success it *loads the
+  snapshot it found* rather than replaying the moves that got there,
+  because replaying can diverge — Route 1's grass interrupts steps with
+  wild encounters, and fleeing takes a different number of turns each
+  time.
 
 ### Scouting scripts (the scaffolding, not the destination)
 
@@ -369,18 +576,35 @@ Here's where this is headed, and why each step is designed the way it is.
    game's own automatic "step out of the doorway" animation to finish,
    instead of acting immediately, landed at the expected tile every
    time.)
-5. **Wild Pokemon encounters** are a different flavor of battle from the
-   rival fight — the opponent varies, and unlike a rival fight you
-   actually *can* run away — so they'll get their own environment variant
-   rather than being forced into the current one. Until that exists, the
-   plan is for the future controller (item 4) to fall back to a simple
-   scripted "always use move 1" behavior for any battle type it doesn't
-   have a trained policy for yet (e.g. a wild encounter met while
-   navigating Route 1), just to survive it and resume navigation.
-6. **Later still**: healing strategy (when to retreat/heal rather than
-   push through a fight), and eventually eight badges and the Elite Four
-   — each one added only once the step before it is actually working, not
-   designed for prematurely.
+5. ~~Bridge from the won rival battle to Route 1's entrance.~~ **Done** —
+   see "Reaching Route 1" above. The controller now runs a fourth
+   segment, `bedroom.state` all the way to standing in Route 1's tall
+   grass, verified reliable across multiple runs.
+6. ~~Route 1 navigation: teach an agent to actually walk Route 1 toward
+   Viridian City, rather than a scripted route.~~ **Done** — see "Route 1
+   navigation" above. ~96-99% success rate, solving the route in as few
+   as ~53 steps.
+7. ~~Wild Pokemon encounters: a different flavor of battle from the rival
+   fight, since the opponent varies and running away is legal.~~ **Done**
+   — see "Wild Pokemon encounters" above. 100/100 wins evaluated against
+   Route 1's actual encounters, though genuine fight-or-flee judgment
+   isn't proven yet since nothing on Route 1 is worth fleeing from.
+8. ~~Unblock the road north out of Viridian City.~~ **Done** — see
+   "Oak's Parcel, and the road north" above. Route 2 is now reachable
+   and `saves/route2_entry.state` exists.
+9. **Route 2 navigation** is next, and is the first task that starts
+   from a properly verified checkpoint: Route 2 is map 13, entered at
+   its southern end around (7-9, 71), running north toward Viridian
+   Forest. Being a tall vertical corridor, it looks like the same shape
+   as Route 1, so the potential-based shaping in
+   `rewards/route1_rewards.py` should carry over — but *which way is
+   forward* needs confirming first this time, not assuming.
+10. **Later still**: healing strategy (when to retreat/heal rather than
+    push through a fight), Viridian Forest/Pewter City, a new battle
+    environment trained specifically for Brock's Rock-type Pokemon, and
+    eventually eight badges and the Elite Four — each one added only
+    once the step before it is actually working, not designed for
+    prematurely.
 
 ## Try it yourself
 
@@ -407,6 +631,14 @@ POKEMON_AI_WINDOW_MODE=null python src/train_battle_agent.py
 
 # 6. Evaluate it over 100 battles
 POKEMON_AI_WINDOW_MODE=null python src/watch_battle_agent.py
+
+# 7. Play the trained DQN through the rival battle and on to Route 1's
+#    entrance, saving that checkpoint (needs models/rival_battle_dqn.zip
+#    from step 5)
+python src/create_route1_entry_state.py
+
+# 8. Or run the whole thing in one continuous session, bedroom to Route 1
+python src/controller.py
 ```
 
 The first time you run something that needs `saves/bedroom.state`, you'll
