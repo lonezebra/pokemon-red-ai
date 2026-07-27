@@ -27,7 +27,9 @@ LEGACY_CHECKPOINT_PATH = PROJECT_ROOT / "models" / "route1_checkpoint.json"
 STATE_PATH = PROJECT_ROOT / "models" / "route1_parallel_state.json"
 WORKER_DIR = PROJECT_ROOT / "models" / "parallel_workers"
 
-NUM_WORKERS = 3  # leaves 1 of this container's 4 cores free
+NUM_WORKERS = 4  # this container's full core count -- the driver spends
+# nearly all its time blocked in join() between rounds (not spinning),
+# so it doesn't meaningfully compete with a full set of worker processes
 EPISODES_PER_ROUND = 100
 MAX_STEPS = 800
 MAX_ROUNDS = 500  # a generous cap, not an expected stopping point
