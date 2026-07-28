@@ -4,6 +4,7 @@ from core.config import PROJECT_ROOT
 from core.state import save_state
 from core.battle_runner import fight_current_battle
 from core.controls import wait_for_free_movement
+from core.pathfind import walk_to_tile
 from core.memory import (
     get_player_position,
     get_detailed_battle_state,
@@ -12,6 +13,7 @@ from core.memory import (
     get_party_hp_fraction,
     get_party_max_hp,
 )
+from create_leveled_state import heal_at_pokemon_center, return_to_forest
 from build_map_panorama import build
 
 # Re-runs the Viridian Forest survey now that its trainers are beatable.
@@ -26,10 +28,21 @@ from build_map_panorama import build
 # trainer-battle DQN evaluates at 100/100, the survey can be handed a
 # battle handler that fights and wins instead of giving up -- so this
 # finds the forest's true exit toward Pewter City, if it has one.
+#
+# The first attempt at that lost a fight and blacked out. Instrumenting
+# it showed why: HP drifted from 100% down to 81% over an unhealed run of
+# five-plus trainers in a row (one single fight alone cost 56% of max
+# HP), and the loss came fighting a sixth already worn down. The 100/100
+# evaluation only ever measured fresh, full-HP battles -- entering one
+# already damaged is a situation the policy has never seen. Rather than
+# trust it to generalize to that, HEAL_BELOW_FRACTION below makes the
+# survey manage HP itself, the same way create_leveled_state.py's grind
+# loop does for the levelling grind.
 
 MODEL_PATH = PROJECT_ROOT / "models" / "trainer_battle_dqn.zip"
 FOREST_MAP_ID = 51
 DIAGNOSTIC_STATE_PATH = PROJECT_ROOT / "saves" / "forest_survey_last_trainer.state"
+HEAL_BELOW_FRACTION = 0.85
 
 
 def make_handle_battle(model):
@@ -80,9 +93,48 @@ def make_handle_battle(model):
     return handle_battle
 
 
+def make_heal_if_needed(handle_battle, min_fraction=HEAL_BELOW_FRACTION):
+    """
+    Called once per tile the survey is about to explore from. If HP is
+    below `min_fraction`, travels all the way out to the Viridian Pokemon
+    Center, heals, and walks back to the exact tile (already known
+    reachable, so this is a fresh but unsurprising walk_to_tile search,
+    not a repeat of any actual fighting) before letting the survey
+    continue -- `handle_battle` is threaded through the whole round trip
+    in case a not-yet-discovered trainer sits somewhere along the way.
+    """
+
+    def heal_if_needed(pyboy, key):
+        if get_party_hp_fraction(pyboy) >= min_fraction:
+            return False
+
+        x, y = key
+        print(
+            f"  HP {get_party_hp(pyboy)}/{get_party_max_hp(pyboy)} "
+            f"({get_party_hp_fraction(pyboy):.0%}) at {key} -- returning to heal"
+        )
+
+        if not heal_at_pokemon_center(pyboy, handle_battle=handle_battle):
+            raise RuntimeError(f"Could not reach the Pokemon Center to heal from {key}")
+        if not return_to_forest(pyboy, handle_battle=handle_battle):
+            raise RuntimeError(f"Could not return to the forest after healing from {key}")
+        if not walk_to_tile(pyboy, x, y, stay_on_map=True, handle_battle=handle_battle):
+            raise RuntimeError(f"Could not navigate back to {key} after healing")
+
+        print(f"    back at {key}, HP{get_party_hp(pyboy)}/{get_party_max_hp(pyboy)}")
+        return True
+
+    return heal_if_needed
+
+
 def main():
     model = DQN.load(str(MODEL_PATH))
-    build("leveled", "forest", handle_battle=make_handle_battle(model))
+    handle_battle = make_handle_battle(model)
+    build(
+        "leveled", "forest",
+        handle_battle=handle_battle,
+        heal_if_needed=make_heal_if_needed(handle_battle),
+    )
 
 
 if __name__ == "__main__":

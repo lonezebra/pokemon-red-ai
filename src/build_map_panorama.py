@@ -28,12 +28,13 @@ from core.memory import get_player_position
 MAX_TILES = 2500
 
 
-def build(state_name, output_prefix, handle_battle=None):
+def build(state_name, output_prefix, handle_battle=None, heal_if_needed=None):
     """
-    `handle_battle`, if given, is passed straight through to
-    `survey_map` -- see there for what it's for. Needed for any map
-    (Viridian Forest) where a trainer occupies a tile the survey would
-    otherwise read as a permanent wall.
+    `handle_battle` and `heal_if_needed`, if given, are passed straight
+    through to `survey_map` -- see there for what each is for. Needed for
+    any map (Viridian Forest) where a trainer occupies a tile the survey
+    would otherwise read as a permanent wall, and where fighting through
+    more than one or two of them means managing HP between fights too.
     """
     pyboy = create_emulator()
     load_state(pyboy, PROJECT_ROOT / "saves" / f"{state_name}.state")
@@ -48,7 +49,8 @@ def build(state_name, output_prefix, handle_battle=None):
         frames.append((x, y, emulator.screen.image.convert("RGB")))
 
     tiles, exits, complete = survey_map(
-        pyboy, max_tiles=MAX_TILES, on_visit=capture, handle_battle=handle_battle
+        pyboy, max_tiles=MAX_TILES, on_visit=capture,
+        handle_battle=handle_battle, heal_if_needed=heal_if_needed,
     )
     pyboy.stop()
 

@@ -181,7 +181,8 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True, han
     return False
 
 
-def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None, handle_battle=None):
+def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None, handle_battle=None,
+               heal_if_needed=None):
     """
     Exhaustively flood-fill the map the player is standing on, without
     stepping off it, and report what is actually there:
@@ -199,6 +200,15 @@ def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None, handle_battle=
     trainer occupying a tile can be fought and beaten rather than simply
     read as a wall -- see `_step` for why that only applies to trainer
     battles, never wild ones.
+
+    `heal_if_needed(pyboy, key)`, if given, is called once per tile
+    dequeued for exploration, before any of its four directions are
+    tried, and should return True if it took the party away to heal (in
+    which case its snapshot is refreshed to the now-healed state before
+    continuing). Needed for any map with more than one or two trainers to
+    fight through: nothing else here manages HP between battles, and a
+    policy measured only at full HP can lose fights it would otherwise
+    win once several have chipped away at it in a row.
 
     If the search finishes before hitting `max_tiles`, the result is
     complete: anything absent from `exits` genuinely is not reachable
@@ -226,6 +236,11 @@ def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None, handle_battle=
 
     while queue and len(tiles) < max_tiles:
         key = queue.popleft()
+
+        if heal_if_needed is not None:
+            _restore(pyboy, states[key])
+            if heal_if_needed(pyboy, key):
+                states[key] = _snapshot(pyboy)
 
         for direction in DIRECTIONS:
             _restore(pyboy, states[key])
