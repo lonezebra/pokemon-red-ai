@@ -28,7 +28,13 @@ from core.memory import get_player_position
 MAX_TILES = 2500
 
 
-def build(state_name, output_prefix):
+def build(state_name, output_prefix, handle_battle=None):
+    """
+    `handle_battle`, if given, is passed straight through to
+    `survey_map` -- see there for what it's for. Needed for any map
+    (Viridian Forest) where a trainer occupies a tile the survey would
+    otherwise read as a permanent wall.
+    """
     pyboy = create_emulator()
     load_state(pyboy, PROJECT_ROOT / "saves" / f"{state_name}.state")
     run_frames(pyboy, 30)
@@ -41,7 +47,9 @@ def build(state_name, output_prefix):
     def capture(emulator, x, y):
         frames.append((x, y, emulator.screen.image.convert("RGB")))
 
-    tiles, exits, complete = survey_map(pyboy, max_tiles=MAX_TILES, on_visit=capture)
+    tiles, exits, complete = survey_map(
+        pyboy, max_tiles=MAX_TILES, on_visit=capture, handle_battle=handle_battle
+    )
     pyboy.stop()
 
     print(f"Captured {len(frames)} tiles (survey complete={complete})")

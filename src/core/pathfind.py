@@ -3,7 +3,7 @@ from collections import deque
 
 from core.emulator import run_frames
 from core.controls import walk_tile, attempt_run_from_wild_battle, wait_for_position_to_settle
-from core.memory import get_player_position, is_in_battle
+from core.memory import get_player_position, is_in_battle, get_battle_type
 
 # General-purpose overworld pathfinding scaffolding.
 #
@@ -56,14 +56,33 @@ def _restore(pyboy, data):
     run_frames(pyboy, 2)
 
 
-def _step(pyboy, direction):
-    """One tile move, fleeing any wild encounter it triggers."""
+def _step(pyboy, direction, handle_battle=None):
+    """
+    One tile move, fleeing any wild encounter it triggers.
+
+    `handle_battle(pyboy)`, if given, is tried instead of fleeing when the
+    encounter is a trainer battle (unlike a wild Pokemon, Gen 1 does not
+    allow fleeing one at all -- without a handler, a trainer occupying a
+    tile is simply unreachable, which is correct for any map whose
+    trainers can't yet be beaten). If the handler clears the battle and
+    the original move had been blocked, the step is retried once: a
+    trainer's sightline trigger commonly blocks movement only until the
+    trainer itself is dealt with, not because the tile is physically
+    impassable.
+    """
     before = get_player_position(pyboy)
 
     moved = walk_tile(pyboy, direction, verbose=False)
     run_frames(pyboy, 6)
+
     if is_in_battle(pyboy):
-        attempt_run_from_wild_battle(pyboy)
+        if get_battle_type(pyboy) == 2 and handle_battle is not None:
+            handle_battle(pyboy)
+            if not moved:
+                moved = walk_tile(pyboy, direction, verbose=False)
+                run_frames(pyboy, 6)
+        else:
+            attempt_run_from_wild_battle(pyboy)
 
     # Crossing a map boundary (a door, or a route edge) hands control
     # back only after the game finishes auto-walking the player clear of
@@ -76,7 +95,7 @@ def _step(pyboy, direction):
     return moved
 
 
-def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
+def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True, handle_battle=None):
     """
     Search outward from the player's current position until reaching a
     tile where `predicate(position_dict)` is true, then leave the
@@ -87,6 +106,9 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
     keeps a search bounded to the current map, so looking for "the tile
     that exits to Route 1" doesn't wander off into Route 1 and start
     exploring that too. Pass False to search across map boundaries.
+
+    `handle_battle`, if given, is passed through to `_step` -- see there
+    for what it's for.
 
     Returns True and leaves the player at the target, or returns False
     and leaves the player where they started.
@@ -110,7 +132,7 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
 
         for direction in DIRECTIONS:
             _restore(pyboy, states[key])
-            moved = _step(pyboy, direction)
+            moved = _step(pyboy, direction, handle_battle=handle_battle)
             position = get_player_position(pyboy)
 
             changed_map = position["map_id"] != start_map
@@ -137,7 +159,7 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
     return False
 
 
-def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None):
+def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None, handle_battle=None):
     """
     Exhaustively flood-fill the map the player is standing on, without
     stepping off it, and report what is actually there:
@@ -150,6 +172,11 @@ def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None):
     tile while the emulator is actually standing on it -- which is what
     lets the map-panorama builder grab a screenshot of every tile rather
     than only the ones a random walk happened to cross.
+
+    `handle_battle(pyboy)`, if given, is passed through to `_step` so a
+    trainer occupying a tile can be fought and beaten rather than simply
+    read as a wall -- see `_step` for why that only applies to trainer
+    battles, never wild ones.
 
     If the search finishes before hitting `max_tiles`, the result is
     complete: anything absent from `exits` genuinely is not reachable
@@ -180,7 +207,7 @@ def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None):
 
         for direction in DIRECTIONS:
             _restore(pyboy, states[key])
-            moved = _step(pyboy, direction)
+            moved = _step(pyboy, direction, handle_battle=handle_battle)
             position = get_player_position(pyboy)
 
             if position["map_id"] != start_map:
