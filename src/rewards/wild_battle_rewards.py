@@ -28,10 +28,18 @@ def calculate_wild_battle_reward(before, after, invalid_action=False):
     same state. Choosing to run is never invalid regardless of PP/moves.
     """
 
-    if invalid_action:
-        return INVALID_MOVE_PENALTY
-
+    # Added, not returned on its own. This originally returned the
+    # penalty directly, from back when an invalid pick pressed no buttons
+    # and left the state untouched -- but the environment now substitutes
+    # the first valid move and really plays it (to avoid the deadlock the
+    # rival battle env hit), so the turn has real consequences that still
+    # need scoring. Returning early threw those away, meaning a battle
+    # *won* on a turn where the agent named an unusable slot paid -0.05
+    # instead of +10. Found by a smoke test of the trainer battle
+    # environment, which shares this reward shape.
     reward = STEP_PENALTY
+    if invalid_action:
+        reward += INVALID_MOVE_PENALTY
 
     enemy_max_hp = max(before["enemy_mon_max_hp"], 1)
     your_max_hp = max(before["battle_mon_max_hp"], 1)

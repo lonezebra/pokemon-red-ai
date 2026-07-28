@@ -7,7 +7,7 @@ from gymnasium import spaces
 from core.emulator import create_emulator, run_frames
 from core.state import load_state, wild_encounter_state_path, WILD_ENCOUNTER_STATE_DIR
 from core.controls import press_button, advance_battle_dialogue
-from core.memory import get_wild_battle_state, get_move_cursor_slot, randomize_battle_mon_stats
+from core.memory import get_detailed_battle_state, get_move_cursor_slot, randomize_battle_mon_stats
 from rewards.wild_battle_rewards import calculate_wild_battle_reward
 
 
@@ -81,11 +81,11 @@ class PokemonRedWildBattleEnv(gym.Env):
 
         self.step_count = 0
 
-        state = get_wild_battle_state(self.pyboy)
+        state = get_detailed_battle_state(self.pyboy)
         return self._observation(state), {}
 
     def step(self, action):
-        before = get_wild_battle_state(self.pyboy)
+        before = get_detailed_battle_state(self.pyboy)
 
         if action == RUN_ACTION:
             self._attempt_run()
@@ -96,7 +96,7 @@ class PokemonRedWildBattleEnv(gym.Env):
             actual_action = valid_slots[0] if chose_invalid_action else action
             self._select_move(actual_action)
 
-        after = get_wild_battle_state(self.pyboy)
+        after = get_detailed_battle_state(self.pyboy)
         reward = calculate_wild_battle_reward(before, after, invalid_action=chose_invalid_action)
 
         self.step_count += 1

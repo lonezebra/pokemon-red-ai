@@ -7,9 +7,21 @@ from core.config import SCREENSHOT_DIR
 from core.screen import save_gif
 from build_player_sprite import PLAYER_SPRITE_BOUNDS, sprite_path
 
-MAP_IMAGE_PATH = SCREENSHOT_DIR / "route1_map.png"
-MAP_META_PATH = SCREENSHOT_DIR / "route1_map_meta.json"
 MASHUP_DIR = SCREENSHOT_DIR / "mashups"
+
+# Which map panorama to draw the runs on. Route 1's was built by
+# build_route1_map.py; anything newer comes from build_map_panorama.py,
+# which surveys the whole map so its coverage is complete rather than
+# whatever a random walk crossed.
+DEFAULT_MAP_PREFIX = "route1"
+
+
+def map_image_path(prefix):
+    return SCREENSHOT_DIR / f"{prefix}_map.png"
+
+
+def map_meta_path(prefix):
+    return SCREENSHOT_DIR / f"{prefix}_map_meta.json"
 
 IN_PROGRESS_COLOR = (240, 220, 60)
 SUCCESS_COLOR = (60, 220, 90)
@@ -109,7 +121,7 @@ def load_tinted_sprites():
     return sprites, sprite_w, sprite_h
 
 
-def build_canvas(meta, runs):
+def build_canvas(meta, runs, map_prefix):
     """
     The panorama only covers the tiles the mapping scout actually
     walked through -- a still-training agent can easily wander outside
@@ -131,7 +143,7 @@ def build_canvas(meta, runs):
     min_x, max_x = min(all_xs), max(all_xs)
     min_y, max_y = min(all_ys), max(all_ys)
 
-    panorama = Image.open(MAP_IMAGE_PATH).convert("RGB")
+    panorama = Image.open(map_image_path(map_prefix)).convert("RGB")
 
     canvas_w = (max_x - min_x) * tile + meta["frame_width"] + pad * 2
     canvas_h = (max_y - min_y) * tile + meta["frame_height"] + pad * 2
@@ -165,17 +177,18 @@ def build_canvas(meta, runs):
     return base, to_pixel
 
 
-def main(run_label=None, duration_ms=60):
+def main(run_label=None, duration_ms=60, map_prefix=DEFAULT_MAP_PREFIX,
+         rollouts_name="route1_mashup_rollouts.json", gif_name="route1_mashup.gif"):
     run_label = run_label or latest_run_label()
     run_dir = MASHUP_DIR / run_label
 
-    with open(MAP_META_PATH) as f:
+    with open(map_meta_path(map_prefix)) as f:
         meta = json.load(f)
-    with open(run_dir / "route1_mashup_rollouts.json") as f:
+    with open(run_dir / rollouts_name) as f:
         data = json.load(f)
 
     runs = data["runs"]
-    base_canvas, to_pixel = build_canvas(meta, runs)
+    base_canvas, to_pixel = build_canvas(meta, runs, map_prefix)
     sprites, sprite_w, sprite_h = load_tinted_sprites()
 
     for run in runs:
@@ -214,9 +227,9 @@ def main(run_label=None, duration_ms=60):
             print(f"Rendered frame {t}/{max_len}")
 
     successes = sum(1 for run in runs if run["reached_goal"])
-    print(f"{successes}/{len(runs)} runs reached Viridian City")
+    print(f"{successes}/{len(runs)} runs reached the goal")
 
-    save_gif(frames, f"mashups/{run_label}/route1_mashup.gif", duration_ms=duration_ms)
+    save_gif(frames, f"mashups/{run_label}/{gif_name}", duration_ms=duration_ms)
 
 
 if __name__ == "__main__":

@@ -563,6 +563,63 @@ accepts it.
   wild encounters, and fleeing takes a different number of turns each
   time.
 
+### Trainer battles, and levelling up (`src/create_trainer_battle_states.py`, `src/envs/trainer_battle_env.py`, `src/rewards/trainer_battle_rewards.py`, `src/create_leveled_state.py`, `src/train_trainer_battle_agent.py`, `src/watch_trainer_battle_agent.py`)
+
+Viridian Forest's only reachable exit leads back the way the agent came
+— the way onward is guarded by Bug Catchers, and since a trainer
+physically occupies its tile, pathfinding correctly reads one as a wall.
+Gen 1 does not allow fleeing a trainer, so getting past means winning.
+
+`create_trainer_battle_states.py` finds them by flood-filling the forest
+and, at every tile it cannot walk out of, pressing A to see what's
+there — capturing one save state per trainer at the first FIGHT/PKMN/
+ITEM/RUN menu. Two things had to be learned the hard way: a trainer
+states their line *before* the battle starts, so the A-press has to
+repeat until a battle actually begins; and standing in a trainer's line
+of sight leaves all four directions from that tile looking blocked, so
+capturing more than one battle per tile just recaptured the same Bug
+Catcher four times over. `envs/trainer_battle_env.py` resets from one of
+these states at random each episode — the same six-number observation as
+the other battle environments, but with **no run action**, since a
+trainer fight only ends in a win or a loss.
+
+**The level ceiling.** A first pass measured whether the fight was even
+winnable at Lv6, the level Route 1 and the wild-encounter policy leave
+the party at. An "always Tackle" policy — close to optimal, since a Lv6
+Squirtle's only damaging move *is* Tackle — won only 8/20, 4/20, 20/20,
+2/20, and 2/20 against the five captured trainers (63% overall), and a
+freshly trained DQN reached just 30/100 in evaluation. That is a level
+problem, not a policy problem: multi-Pokemon Bug Catcher parties grind
+down a Lv6 Squirtle on poison chip damage regardless of move choice.
+
+Rather than tune a reward against a target that can't be hit,
+`create_leveled_state.py` uses one already-solved skill to unblock
+another: it grinds wild battles on Route 1 with the 100/100 wild-battle
+policy — real fights, not scripted ones, with only *where to walk* and
+*when to heal* hard-coded — healing at the Viridian Pokémon Center
+whenever HP drops below 45%, until the party reaches Lv10 (comfortably
+past Bubble, a second damaging move, learned at Lv8). It starts from the
+post-Parcel checkpoint rather than `route_1_entry.state`, since the
+latter predates the Parcel errand and still has Viridian's north gate
+shut. At Lv10, "always Tackle" (now with Bubble available too) wins
+20/20 against every one of the five trainers.
+
+That measurement first came back as a *worse*-looking 63% at Lv10 than
+the Lv6 baseline — the giveaway that something was wrong, not that
+levelling had backfired. The culprit was
+`randomize_battle_mon_stats`, which only knows the stat range of a
+freshly-obtained *level 5* starter and was quietly rerolling the levelled
+Squirtle's 32 HP back down to about 20. `trainer_battle_env.py` now
+defaults `randomize_stats=False` for this environment, since these
+battles are fought by a deliberately levelled party with one specific IV
+roll rather than a range worth randomizing over.
+
+With the level ceiling and the stat-reroll bug both fixed,
+`train_trainer_battle_agent.py` trained a fresh DQN from Lv10, and
+`watch_trainer_battle_agent.py` evaluated it the same way as every other
+battle policy in this project: **100/100** wins over 100 greedy episodes,
+against the usual 90% bar.
+
 ### Scouting scripts (the scaffolding, not the destination)
 
 A handful of scripts were how the coordinates and routes above were
@@ -633,16 +690,50 @@ Here's where this is headed, and why each step is designed the way it is.
 9. ~~Route 2 navigation, this time from a properly verified
    checkpoint.~~ **Done** — see "Route 2 navigation" above. **50/50** in
    evaluation, a 41-step path every time.
-10. **Viridian Forest** is next: it sits behind the gate at map 50, and
-    is the first area that is a genuine maze rather than a corridor —
-    so the y-coordinate potential shaping that carried Route 1 straight
-    over to Route 2 probably will *not* transfer, and `survey_map()`
-    should be run on it early to find out what shape the problem
-    actually is before a reward function is designed for it.
-11. **Later still**: healing strategy (when to retreat/heal rather than
-    push through a fight), Pewter City, a new battle environment
-    trained specifically for Brock's Rock-type Pokemon, and eventually
-    eight badges and the Elite Four — each one added only once the step
+10. **Viridian Forest is surveyed but blocked, and the survey is why we
+    know that.** Map 51, reached through the gate at map 50 (both now
+    verified rather than inferred from the map table). `survey_map()`
+    flood-filled it to completion: **676 reachable tiles**, filling only
+    **45% of its bounding box** — so it is a genuine maze, confirming
+    the y-coordinate shaping that carried Route 1 over to Route 2 would
+    *not* have transferred. But the more important result is that its
+    **only reachable exit leads back the way we came**. There is no way
+    north to Pewter City from where the agent currently stands.
+
+    That is the Route 22 situation exactly — a task whose goal cannot be
+    reached — except this time it cost about twenty minutes of surveying
+    instead of 1500 training episodes. Checked hard before trusting it,
+    since the negative result is the whole claim: the survey completed
+    with its frontier exhausted (not truncated), zero unfleeable battles
+    corrupted it, the entire northern tree line was confirmed solid both
+    visually and by interacting north from eight separate positions, and
+    400 steps of ordinary walking produced 9 wild battles and no trainer
+    battles.
+
+    What blocks it looks like the forest's trainers. Probing every
+    blocked direction found 72 that respond, several of them Bug
+    Catchers ("Hey, wait up!") standing at chokepoints. A trainer
+    occupies its tile, so pathfinding correctly reads it as a wall —
+    which means getting past them needs the ability to *win* a trainer
+    battle, since unlike a wild Pokemon a trainer cannot be fled.
+11. ~~Trainer battles are the real next milestone, unblocking Viridian
+    Forest and Brock.~~ **Done** — see "Trainer battles, and levelling
+    up" above. **100/100** in evaluation, but only after fixing a level
+    ceiling the policy itself could never have solved: the party is now
+    levelled to Lv10 first, via `create_leveled_state.py`.
+12. **Next up: re-survey Viridian Forest.** The 676-tile survey behind
+    item 10 could only see as far as the Bug Catchers block it, so its
+    "only exit leads back the way we came" result needs re-running now
+    that they're beatable — the actual path north to Pewter City is
+    still unconfirmed. The forest panorama used for the run mashups
+    (`build_map_panorama.py`) gets rebuilt at the same time, since the
+    current one still shows the trainers standing in place (the median
+    stitching only erases things that move between frames).
+13. **Later still**: Viridian Forest navigation once its real exit is
+    known, healing strategy (when to retreat/heal rather than push
+    through a fight), Pewter City, a new battle environment trained
+    specifically for Brock's Rock-type Pokemon, and eventually eight
+    badges and the Elite Four — each one added only once the step
     before it is actually working, not designed for prematurely.
 
 ## Try it yourself

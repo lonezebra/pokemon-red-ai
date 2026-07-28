@@ -237,3 +237,41 @@ def attempt_run_from_wild_battle(pyboy, max_attempts=10):
         run_frames(pyboy, 20)
 
     return not is_in_battle(pyboy)
+
+def wait_for_free_movement(pyboy, max_presses=60):
+    """
+    Press A until the player can actually walk again, then report
+    whether control came back.
+
+    Needed because several things hand control back only after a text
+    box that nothing else clears -- most importantly a blackout, where
+    fainting teleports the player to a Pokemon Center and leaves the
+    "you scurried back" message on screen. Pathfinding into that state
+    reads every direction as blocked and concludes, quite reasonably,
+    that there is nowhere to go.
+
+    Direction-agnostic on purpose, unlike
+    create_starter_obtained_state.wait_for_control_and_walk, which
+    tests one specific next move in a known route. Here the caller just
+    needs *any* movement to prove control is back, and it undoes the
+    probe step so the player finishes where they started.
+    """
+
+    from core.memory import get_player_position
+
+    for _ in range(max_presses):
+        for direction in ("up", "down", "left", "right"):
+            before = get_player_position(pyboy)
+            if walk_tile(pyboy, direction, max_hold_frames=20, settle_frames=5, verbose=False):
+                after = get_player_position(pyboy)
+                if after["map_id"] == before["map_id"]:
+                    walk_tile(pyboy, OPPOSITE[direction], max_hold_frames=20,
+                              settle_frames=5, verbose=False)
+                return True
+
+        press_button(pyboy, "a", hold_frames=12, release_frames=24)
+
+    return False
+
+
+OPPOSITE = {"up": "down", "down": "up", "left": "right", "right": "left"}
