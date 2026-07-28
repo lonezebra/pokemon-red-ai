@@ -2,7 +2,7 @@ import io
 from collections import deque
 
 from core.emulator import run_frames
-from core.controls import walk_tile, attempt_run_from_wild_battle, wait_for_position_to_settle
+from core.controls import walk_tile, press_button, attempt_run_from_wild_battle, wait_for_position_to_settle
 from core.memory import get_player_position, is_in_battle, get_battle_type
 
 # General-purpose overworld pathfinding scaffolding.
@@ -56,19 +56,42 @@ def _restore(pyboy, data):
     run_frames(pyboy, 2)
 
 
+def _try_engage_trainer(pyboy, max_presses=12):
+    """
+    Press A repeatedly to see whether a blocked tile is a trainer, rather
+    than a genuine wall.
+
+    Confirmed empirically while building create_trainer_battle_states.py:
+    unlike the wild encounters this project has handled everywhere else,
+    walking toward a trainer's tile does not start their battle by
+    itself -- it just blocks the move, the same as any other impassable
+    tile. Only talking to them does, and their pre-battle line comes
+    first, so the press has to repeat until the battle actually begins
+    rather than checking once.
+    """
+    for _ in range(max_presses):
+        press_button(pyboy, "a", hold_frames=12, release_frames=26)
+        run_frames(pyboy, 20)
+        if is_in_battle(pyboy):
+            return get_battle_type(pyboy) == 2
+    return False
+
+
 def _step(pyboy, direction, handle_battle=None):
     """
     One tile move, fleeing any wild encounter it triggers.
 
-    `handle_battle(pyboy)`, if given, is tried instead of fleeing when the
-    encounter is a trainer battle (unlike a wild Pokemon, Gen 1 does not
-    allow fleeing one at all -- without a handler, a trainer occupying a
-    tile is simply unreachable, which is correct for any map whose
-    trainers can't yet be beaten). If the handler clears the battle and
-    the original move had been blocked, the step is retried once: a
-    trainer's sightline trigger commonly blocks movement only until the
-    trainer itself is dealt with, not because the tile is physically
-    impassable.
+    `handle_battle(pyboy)`, if given, is tried when a blocked move turns
+    out to be a trainer rather than a wall (unlike a wild Pokemon, Gen 1
+    does not allow fleeing one at all -- without a handler, a trainer is
+    simply unreachable, which is correct for any map whose trainers can't
+    yet be beaten). Probing for one is only attempted when a handler is
+    given: pressing A into whatever is blocking the way is harmless for a
+    trainer, but would have unwanted side effects elsewhere (opening a
+    sign's text, talking to an unrelated NPC) on any map that doesn't
+    have trainers to find this way. If the handler clears the battle, the
+    step is retried once, since the block was the trainer's presence, not
+    the tile itself.
     """
     before = get_player_position(pyboy)
 
@@ -76,13 +99,12 @@ def _step(pyboy, direction, handle_battle=None):
     run_frames(pyboy, 6)
 
     if is_in_battle(pyboy):
-        if get_battle_type(pyboy) == 2 and handle_battle is not None:
+        attempt_run_from_wild_battle(pyboy)
+    elif not moved and handle_battle is not None:
+        if _try_engage_trainer(pyboy):
             handle_battle(pyboy)
-            if not moved:
-                moved = walk_tile(pyboy, direction, verbose=False)
-                run_frames(pyboy, 6)
-        else:
-            attempt_run_from_wild_battle(pyboy)
+            moved = walk_tile(pyboy, direction, verbose=False)
+            run_frames(pyboy, 6)
 
     # Crossing a map boundary (a door, or a route edge) hands control
     # back only after the game finishes auto-walking the player clear of
