@@ -88,9 +88,42 @@ MAX_BAG_ITEMS = 20
 OAKS_PARCEL_ITEM_ID = 70
 
 
+# The first party Pokemon, readable outside battle (the battle_struct
+# addresses above only hold meaningful values mid-fight). Verified
+# against known ground truth before use: standing in Viridian Forest
+# with one Lv6 Squirtle on 23/23 HP, these read species 177, level 6,
+# and 23/23 -- matching both the party count and the battle-struct
+# values seen during the trainer captures.
+ADDR_PARTY_COUNT = 0xD163
+ADDR_PARTY_SPECIES = 0xD16B
+ADDR_PARTY_HP = 0xD16C       # 2 bytes, big-endian
+ADDR_PARTY_LEVEL = 0xD18C
+ADDR_PARTY_MAX_HP = 0xD18D   # 2 bytes, big-endian
+
+
 def read_u16(pyboy, addr):
     """Read a big-endian 2-byte value."""
     return (pyboy.memory[addr] << 8) | pyboy.memory[addr + 1]
+
+
+def get_party_count(pyboy):
+    return pyboy.memory[ADDR_PARTY_COUNT]
+
+
+def get_party_level(pyboy):
+    return pyboy.memory[ADDR_PARTY_LEVEL]
+
+
+def get_party_hp(pyboy):
+    return read_u16(pyboy, ADDR_PARTY_HP)
+
+
+def get_party_max_hp(pyboy):
+    return read_u16(pyboy, ADDR_PARTY_MAX_HP)
+
+
+def get_party_hp_fraction(pyboy):
+    return get_party_hp(pyboy) / max(get_party_max_hp(pyboy), 1)
 
 
 def get_bag_item_ids(pyboy):
@@ -310,6 +343,13 @@ def write_u16(pyboy, addr, value):
 
 def randomize_battle_mon_stats(pyboy, rng):
     """
+    ONLY valid for a level 5 starter -- the ranges below are the real
+    spread for a freshly-obtained Lv5 Squirtle and nothing else.
+    Applying it to a levelled Pokemon silently *downgrades* it: a Lv10
+    Squirtle on 32 HP gets reset to 19-20. That cost a full round of
+    misleading measurements after create_leveled_state.py existed, so
+    callers working with a levelled party must leave it off.
+
     Roll new stats for the player's battle Pokemon within the range an
     actual freshly-obtained level-5 Squirtle could have, then set current
     HP to the (possibly new) max HP. `rng` is any object with `.randint`

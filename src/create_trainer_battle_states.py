@@ -38,7 +38,18 @@ from core.memory import (
 #     battle per tile, and only from tiles well away from an
 #     already-captured one, gets distinct trainers instead.
 
+# Prefers the levelled checkpoint when it exists. Captured at Lv6 these
+# battles were measured unwinnable at the project's usual bar -- an
+# essentially optimal "always attack" policy topped out near 67%,
+# because a Lv6 Squirtle's only damaging move is Tackle and multi-Pokemon
+# Bug Catcher parties win on poison chip damage alone. create_leveled_
+# state.py exists to fix that, so capture from its result if available.
+LEVELED_STATE_PATH = PROJECT_ROOT / "saves" / "leveled.state"
 FOREST_ENTRY_STATE_PATH = PROJECT_ROOT / "saves" / "viridian_forest_entry.state"
+
+
+def _start_state_path():
+    return LEVELED_STATE_PATH if LEVELED_STATE_PATH.exists() else FOREST_ENTRY_STATE_PATH
 VIRIDIAN_FOREST_MAP_ID = 51
 
 MAX_TILES = 2500
@@ -80,7 +91,7 @@ def _try_start_trainer_battle(pyboy):
 
 def capture_trainer_battles():
     pyboy = create_emulator()
-    load_state(pyboy, FOREST_ENTRY_STATE_PATH)
+    load_state(pyboy, _start_state_path())
     run_frames(pyboy, 30)
 
     start = get_player_position(pyboy)
@@ -143,6 +154,9 @@ def capture_trainer_battles():
 
 def main():
     TRAINER_BATTLE_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"Capturing from {_start_state_path().name}")
+    for stale in TRAINER_BATTLE_STATE_DIR.glob("trainer_*.state"):
+        stale.unlink()
     found = capture_trainer_battles()
 
     print()

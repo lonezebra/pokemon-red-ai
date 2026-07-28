@@ -43,15 +43,21 @@ class PokemonRedTrainerBattleEnv(gym.Env):
     specifically to the higher-level ones, that is the obvious first
     thing to add.
 
-    randomize_stats=True (the default) rerolls the player's own stats
-    each reset, same reasoning as the other battle environments: each
-    captured state holds one exact IV roll, and a policy trained against
-    only that can quietly memorize one matchup.
+    randomize_stats defaults to **False** here, unlike the other battle
+    environments. Their randomisation exists to stop a policy memorising
+    one exact IV roll, but memory.randomize_battle_mon_stats only knows
+    the stat range of a freshly-obtained *level 5* starter. These battles
+    are fought by a deliberately levelled party (see
+    create_leveled_state.py), so rerolling would quietly reset a Lv10
+    Squirtle's 32 HP back to about 20 -- which is exactly what happened,
+    and made a first round of Lv10 measurements meaningless. The cost is
+    that each captured state carries one IV roll; worth revisiting with
+    level-aware randomisation if a policy starts looking overfitted.
     """
 
     metadata = {"render_modes": []}
 
-    def __init__(self, max_steps=60, randomize_stats=True):
+    def __init__(self, max_steps=60, randomize_stats=False):
         super().__init__()
 
         self.pyboy = create_emulator()
