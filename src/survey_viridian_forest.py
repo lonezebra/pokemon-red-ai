@@ -126,10 +126,13 @@ def make_heal_if_needed(handle_battle, min_fraction=HEAL_BELOW_FRACTION):
     a real one-way barrier (this part of Viridian Forest likely has a
     ledge, same as several routes in this game) rather than a search that
     just needed more room. Past a point like that, "heal by walking back"
-    is not a recoverable situation, so failing to heal is treated as a
-    warning rather than fatal: the survey keeps going at whatever HP it
-    has rather than stopping cold the first time retreat becomes
-    impossible.
+    is not a recoverable situation no matter the budget, so any failure
+    along the round trip is just abandoned rather than escalated: this
+    function returns False and the caller (survey_map) restores its own
+    saved snapshot for `key` regardless of what this function returns or
+    where it leaves the emulator, so there is nothing to recover here --
+    walking back to `key` only matters for capturing an updated, healed
+    snapshot on success, never for correctness on failure.
     """
 
     def heal_if_needed(pyboy, key):
@@ -142,26 +145,24 @@ def make_heal_if_needed(handle_battle, min_fraction=HEAL_BELOW_FRACTION):
             f"({get_party_hp_fraction(pyboy):.0%}) at {key} -- returning to heal"
         )
 
-        healed = False
-        if heal_at_pokemon_center(pyboy, handle_battle=handle_battle, max_tiles=TRAVEL_MAX_TILES):
-            if return_to_forest(pyboy, handle_battle=handle_battle, max_tiles=TRAVEL_MAX_TILES):
-                healed = True
-            else:
-                print(f"    healed, but could not return to the forest from the "
-                      f"Pokemon Center -- trying to reach {key} directly instead")
-        else:
+        if not heal_at_pokemon_center(pyboy, handle_battle=handle_battle, max_tiles=TRAVEL_MAX_TILES):
             print(f"    could not reach the Pokemon Center from {key} -- likely "
                   f"a one-way barrier past this point; continuing unhealed")
+            return False
+
+        if not return_to_forest(pyboy, handle_battle=handle_battle, max_tiles=TRAVEL_MAX_TILES):
+            print(f"    healed, but could not return to the forest from the "
+                  f"Pokemon Center; continuing from the pre-heal snapshot at {key}")
+            return False
 
         if not walk_to_tile(pyboy, x, y, stay_on_map=True, handle_battle=handle_battle,
                              max_tiles=TRAVEL_MAX_TILES):
-            raise RuntimeError(
-                f"Could not get back to {key} after a heal attempt (healed={healed})"
-            )
+            print(f"    healed and returned to the forest, but could not navigate "
+                  f"back to {key}; continuing from the pre-heal snapshot instead")
+            return False
 
-        status = "healed" if healed else "unhealed -- could not reach the Pokemon Center"
-        print(f"    back at {key}, HP{get_party_hp(pyboy)}/{get_party_max_hp(pyboy)} ({status})")
-        return healed
+        print(f"    back at {key}, HP{get_party_hp(pyboy)}/{get_party_max_hp(pyboy)} (healed)")
+        return True
 
     return heal_if_needed
 
