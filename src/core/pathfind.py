@@ -137,7 +137,7 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
     return False
 
 
-def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES):
+def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None):
     """
     Exhaustively flood-fill the map the player is standing on, without
     stepping off it, and report what is actually there:
@@ -145,6 +145,11 @@ def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES):
         tiles -- every reachable (x, y) on this map
         exits -- {((x, y), direction): (map_id, x, y)} for each tile that
                  leads somewhere else
+
+    `on_visit(pyboy, x, y)`, if given, is called once per newly reached
+    tile while the emulator is actually standing on it -- which is what
+    lets the map-panorama builder grab a screenshot of every tile rather
+    than only the ones a random walk happened to cross.
 
     If the search finishes before hitting `max_tiles`, the result is
     complete: anything absent from `exits` genuinely is not reachable
@@ -166,6 +171,9 @@ def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES):
     tiles = {start_key}
     exits = {}
     queue = deque([start_key])
+
+    if on_visit is not None:
+        on_visit(pyboy, start["x"], start["y"])
 
     while queue and len(tiles) < max_tiles:
         key = queue.popleft()
@@ -190,6 +198,8 @@ def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES):
                 tiles.add(next_key)
                 states[next_key] = _snapshot(pyboy)
                 queue.append(next_key)
+                if on_visit is not None:
+                    on_visit(pyboy, position["x"], position["y"])
 
     complete = not queue
     _restore(pyboy, origin)
