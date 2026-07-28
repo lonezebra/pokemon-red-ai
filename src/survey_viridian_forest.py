@@ -50,7 +50,16 @@ HEAL_BELOW_FRACTION = 0.85
 # to the entrance, so its budget has to match or it fails long before
 # the forest itself runs out of unexplored tiles. Confirmed: a heal
 # attempted from (25, 18) failed to find a path out at the 1200 default.
-TRAVEL_MAX_TILES = 2500
+#
+# 2500 itself later proved insufficient too, for a different reason:
+# unlike the outer survey_map call (which accretes one shared, cached
+# `tiles`/`states` set across the whole run), every individual heal trip
+# is its own fresh, cache-less walk_to_map/walk_to_tile search that has
+# to rediscover a large fraction of the maze from scratch each time --
+# so the deeper a heal is triggered from, the more of the map that one
+# search has to re-explore blind. Confirmed: a heal from (1, 15) failed
+# to find map 50 even at 5000.
+TRAVEL_MAX_TILES = 10000
 
 
 def make_handle_battle(model):
