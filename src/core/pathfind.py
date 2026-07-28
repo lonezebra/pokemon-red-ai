@@ -142,7 +142,8 @@ def _step(pyboy, direction, handle_battle=None):
     return moved
 
 
-def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True, handle_battle=None):
+def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True, handle_battle=None,
+            heal_if_needed=None):
     """
     Search outward from the player's current position until reaching a
     tile where `predicate(position_dict)` is true, then leave the
@@ -156,6 +157,13 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True, han
 
     `handle_battle`, if given, is passed through to `_step` -- see there
     for what it's for.
+
+    `heal_if_needed(pyboy, (x, y))`, if given, is called once per tile
+    dequeued for exploration, the same as `survey_map`'s parameter of the
+    same name -- necessary for any search deep enough to need HP managed
+    along the way, e.g. reaching a single faraway coordinate in Viridian
+    Forest by refighting every trainer along whichever path the BFS takes
+    there, the same as the main survey itself needs.
 
     Returns True and leaves the player at the target, or returns False
     and leaves the player where they started.
@@ -176,6 +184,11 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True, han
 
     while queue and len(seen) < max_tiles:
         key = queue.popleft()
+
+        if heal_if_needed is not None:
+            _restore(pyboy, states[key])
+            if heal_if_needed(pyboy, key[1:]):
+                states[key] = _snapshot(pyboy)
 
         for direction in DIRECTIONS:
             _restore(pyboy, states[key])
