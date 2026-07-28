@@ -43,6 +43,14 @@ MODEL_PATH = PROJECT_ROOT / "models" / "trainer_battle_dqn.zip"
 FOREST_MAP_ID = 51
 DIAGNOSTIC_STATE_PATH = PROJECT_ROOT / "saves" / "forest_survey_last_trainer.state"
 HEAL_BELOW_FRACTION = 0.85
+# pathfind.DEFAULT_MAX_TILES (1200) is well past what any other map here
+# has needed, but build_map_panorama's own survey of this one is allowed
+# up to 2500 -- a heal round trip starting deep inside the forest can
+# legitimately need to search nearly the whole map to find its way back
+# to the entrance, so its budget has to match or it fails long before
+# the forest itself runs out of unexplored tiles. Confirmed: a heal
+# attempted from (25, 18) failed to find a path out at the 1200 default.
+TRAVEL_MAX_TILES = 2500
 
 
 def make_handle_battle(model):
@@ -114,11 +122,12 @@ def make_heal_if_needed(handle_battle, min_fraction=HEAL_BELOW_FRACTION):
             f"({get_party_hp_fraction(pyboy):.0%}) at {key} -- returning to heal"
         )
 
-        if not heal_at_pokemon_center(pyboy, handle_battle=handle_battle):
+        if not heal_at_pokemon_center(pyboy, handle_battle=handle_battle, max_tiles=TRAVEL_MAX_TILES):
             raise RuntimeError(f"Could not reach the Pokemon Center to heal from {key}")
-        if not return_to_forest(pyboy, handle_battle=handle_battle):
+        if not return_to_forest(pyboy, handle_battle=handle_battle, max_tiles=TRAVEL_MAX_TILES):
             raise RuntimeError(f"Could not return to the forest after healing from {key}")
-        if not walk_to_tile(pyboy, x, y, stay_on_map=True, handle_battle=handle_battle):
+        if not walk_to_tile(pyboy, x, y, stay_on_map=True, handle_battle=handle_battle,
+                             max_tiles=TRAVEL_MAX_TILES):
             raise RuntimeError(f"Could not navigate back to {key} after healing")
 
         print(f"    back at {key}, HP{get_party_hp(pyboy)}/{get_party_max_hp(pyboy)}")

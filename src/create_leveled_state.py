@@ -101,7 +101,7 @@ OVERWORLD_CHAIN = [
 BUILDING_PARENT = {VIRIDIAN_POKECENTER_MAP_ID: VIRIDIAN_CITY_MAP_ID}
 
 
-def travel_to(pyboy, target_map, handle_battle=None):
+def travel_to(pyboy, target_map, handle_battle=None, max_tiles=None):
     """
     Walk to `target_map` from wherever the player currently is, including
     from inside a building -- which matters because fainting blacks the
@@ -112,6 +112,15 @@ def travel_to(pyboy, target_map, handle_battle=None):
     leg -- needed by the forest survey's heal-and-return trip, since a
     map along the way (Route 2, the forest itself) can still have a
     trainer that hasn't been dealt with yet.
+
+    `max_tiles`, if given, overrides each leg's search budget. Needed for
+    that same heal-and-return trip: pathfind.DEFAULT_MAX_TILES (1200) is
+    comfortably more than Route 1/Route 2/Viridian City ever needed, but
+    Viridian Forest's own survey is allowed up to 2500, and a return trip
+    starting deep inside it can legitimately need to search nearly the
+    whole map to find its way back out -- a smaller cap here than the
+    survey uses elsewhere would make the walk back fail long before the
+    forest itself runs out of unexplored tiles.
     """
 
     wait_for_free_movement(pyboy)
@@ -120,15 +129,20 @@ def travel_to(pyboy, target_map, handle_battle=None):
     if current == target_map:
         return True
 
+    kwargs = {"handle_battle": handle_battle}
+    if max_tiles is not None:
+        kwargs["max_tiles"] = max_tiles
+
     if target_map in BUILDING_PARENT:
-        if not travel_to(pyboy, BUILDING_PARENT[target_map], handle_battle=handle_battle):
+        if not travel_to(pyboy, BUILDING_PARENT[target_map], handle_battle=handle_battle,
+                          max_tiles=max_tiles):
             return False
-        return walk_to_map(pyboy, target_map, handle_battle=handle_battle)
+        return walk_to_map(pyboy, target_map, **kwargs)
 
     if current not in OVERWORLD_CHAIN:
         # Inside somewhere -- step out to whichever overworld map adjoins.
         for candidate in OVERWORLD_CHAIN:
-            if walk_to_map(pyboy, candidate, handle_battle=handle_battle):
+            if walk_to_map(pyboy, candidate, **kwargs):
                 break
         current = get_player_position(pyboy)["map_id"]
         if current not in OVERWORLD_CHAIN:
@@ -140,20 +154,21 @@ def travel_to(pyboy, target_map, handle_battle=None):
     step = 1 if there > here else -1
 
     for index in range(here + step, there + step, step):
-        if not walk_to_map(pyboy, OVERWORLD_CHAIN[index], handle_battle=handle_battle):
+        if not walk_to_map(pyboy, OVERWORLD_CHAIN[index], **kwargs):
             print(f"  travel: could not reach map {OVERWORLD_CHAIN[index]}")
             return False
     return True
 
 
-def heal_at_pokemon_center(pyboy, handle_battle=None):
+def heal_at_pokemon_center(pyboy, handle_battle=None, max_tiles=None):
     """
     Talk to the nurse until HP is actually full again -- checking real HP
     rather than counting dialogue presses, the same pattern every other
     scripted interaction here uses.
     """
 
-    if not travel_to(pyboy, VIRIDIAN_POKECENTER_MAP_ID, handle_battle=handle_battle):
+    if not travel_to(pyboy, VIRIDIAN_POKECENTER_MAP_ID, handle_battle=handle_battle,
+                      max_tiles=max_tiles):
         return False
 
     for _ in range(8):
@@ -170,8 +185,9 @@ def heal_at_pokemon_center(pyboy, handle_battle=None):
     return get_party_hp(pyboy) >= get_party_max_hp(pyboy)
 
 
-def return_to_forest(pyboy, handle_battle=None):
-    if not travel_to(pyboy, VIRIDIAN_FOREST_MAP_ID, handle_battle=handle_battle):
+def return_to_forest(pyboy, handle_battle=None, max_tiles=None):
+    if not travel_to(pyboy, VIRIDIAN_FOREST_MAP_ID, handle_battle=handle_battle,
+                      max_tiles=max_tiles):
         return False
     # The entry tiles are exits; step clear of them so an unlucky walk
     # south does not immediately leave again.
