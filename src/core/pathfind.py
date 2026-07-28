@@ -77,6 +77,9 @@ def _try_engage_trainer(pyboy, max_presses=12):
     return False
 
 
+WALL_RETRIES = 3
+
+
 def _step(pyboy, direction, handle_battle=None):
     """
     One tile move, fleeing any wild encounter it triggers.
@@ -92,6 +95,20 @@ def _step(pyboy, direction, handle_battle=None):
     have trainers to find this way. If the handler clears the battle, the
     step is retried once, since the block was the trainer's presence, not
     the tile itself.
+
+    A move that still looks blocked after that gets a few more plain
+    retries before it's accepted as a real wall. Every route and the
+    forest surveyed so far only ever had *stationary* trainers blocking
+    a tile, so one failed attempt was always conclusive there -- but
+    Viridian City has ordinary pedestrian NPCs that wander on their own
+    timer, and one can transiently stand in the way of a tile that is
+    otherwise perfectly walkable. Caught directly: a heal trip's return
+    path surveyed only 26 tiles out of Viridian City's north entrance,
+    with every exit leading right back the way it came -- looking exactly
+    like Route 22's real dead end, except a manual walk through the same
+    spot moments later got blocked once and then succeeded on an
+    immediate, otherwise-identical retry. One failure can't tell a real
+    wall from an NPC that will have stepped aside a moment later.
     """
     before = get_player_position(pyboy)
 
@@ -105,6 +122,14 @@ def _step(pyboy, direction, handle_battle=None):
             handle_battle(pyboy)
             moved = walk_tile(pyboy, direction, verbose=False)
             run_frames(pyboy, 6)
+
+    if not moved and not is_in_battle(pyboy):
+        for _ in range(WALL_RETRIES):
+            run_frames(pyboy, 15)
+            moved = walk_tile(pyboy, direction, verbose=False)
+            run_frames(pyboy, 6)
+            if moved:
+                break
 
     # Crossing a map boundary (a door, or a route edge) hands control
     # back only after the game finishes auto-walking the player clear of
