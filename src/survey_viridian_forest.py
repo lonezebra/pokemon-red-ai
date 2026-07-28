@@ -1,9 +1,17 @@
 from stable_baselines3 import DQN
 
 from core.config import PROJECT_ROOT
+from core.state import save_state
 from core.battle_runner import fight_current_battle
 from core.controls import wait_for_free_movement
-from core.memory import get_player_position
+from core.memory import (
+    get_player_position,
+    get_detailed_battle_state,
+    get_party_level,
+    get_party_hp,
+    get_party_hp_fraction,
+    get_party_max_hp,
+)
 from build_map_panorama import build
 
 # Re-runs the Viridian Forest survey now that its trainers are beatable.
@@ -21,31 +29,53 @@ from build_map_panorama import build
 
 MODEL_PATH = PROJECT_ROOT / "models" / "trainer_battle_dqn.zip"
 FOREST_MAP_ID = 51
+DIAGNOSTIC_STATE_PATH = PROJECT_ROOT / "saves" / "forest_survey_last_trainer.state"
 
 
 def make_handle_battle(model):
     def handle_battle(pyboy):
+        position = get_player_position(pyboy)
+        before = get_detailed_battle_state(pyboy)
+        print(
+            f"  trainer at {(position['x'], position['y'])}: "
+            f"our Lv{get_party_level(pyboy)} HP{get_party_hp(pyboy)}/"
+            f"{get_party_max_hp(pyboy)} ({get_party_hp_fraction(pyboy):.0%}) "
+            f"vs enemy species {before['enemy_mon_species']} "
+            f"Lv{before['enemy_mon_level']}"
+        )
+        # Kept for reproduction if this fight is the one that loses --
+        # the training states only ever cover the five trainers captured
+        # before this point, at full HP, so this is the only record of
+        # what a fight further in (or fought while already worn down by
+        # an earlier one, since nothing here heals between battles the
+        # way create_leveled_state.py's grind loop does) actually looks
+        # like.
+        save_state(pyboy, DIAGNOSTIC_STATE_PATH)
+
         fight_current_battle(pyboy, model)
         # Clears any trailing "you got $X" / trainer's parting line --
         # the same trailing dialogue create_leveled_state.py's grind()
         # clears after every battle, win or lose.
         wait_for_free_movement(pyboy)
 
-        position = get_player_position(pyboy)
-        if position["map_id"] != FOREST_MAP_ID:
+        after_position = get_player_position(pyboy)
+        if after_position["map_id"] != FOREST_MAP_ID:
             # A loss blacks the party out to the last Pokemon Center,
             # which would otherwise look to the BFS like a legitimate
             # exit from this tile -- so the whole run is aborted rather
             # than silently mislabeling a loss as forest topology. At
-            # 100/100 in evaluation this should not happen, but the
-            # policy has only ever been measured against the five
-            # trainers captured before Route 2 forced their discovery
-            # to stop, and there may be others further in.
+            # 100/100 in evaluation this should not happen at full HP,
+            # but that evaluation never fought two battles back to back
+            # without healing in between, and this survey does.
             raise RuntimeError(
                 f"Lost a trainer battle during the survey -- blacked out "
-                f"to map {position['map_id']}. The trained policy is not "
-                f"reliable enough to survey past this trainer."
+                f"to map {after_position['map_id']}. Went in at "
+                f"HP{get_party_hp(pyboy)}/{get_party_max_hp(pyboy)} vs "
+                f"enemy species {before['enemy_mon_species']} "
+                f"Lv{before['enemy_mon_level']}. Diagnostic state saved to "
+                f"{DIAGNOSTIC_STATE_PATH}."
             )
+        print(f"    won, now HP{get_party_hp(pyboy)}/{get_party_max_hp(pyboy)}")
 
     return handle_battle
 
