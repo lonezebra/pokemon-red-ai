@@ -50,6 +50,11 @@ def build(state_name, output_prefix):
 
     image, meta = stitch_panorama(frames)
     meta["map_id"] = start["map_id"]
+    # The flood fill already knows every walkable tile, so record it
+    # rather than throw it away -- a navigation env for this map gets its
+    # reachable set (and so a sanity check on any recorded rollout)
+    # without paying for a second survey.
+    meta["tiles"] = sorted([x, y] for x, y in tiles)
     meta["exits"] = [
         {"from": list(tile), "direction": direction, "to_map": dest[0],
          "to": [dest[1], dest[2]]}
