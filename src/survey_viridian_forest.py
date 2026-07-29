@@ -13,7 +13,7 @@ from core.memory import (
     get_party_hp_fraction,
     get_party_max_hp,
 )
-from create_leveled_state import heal_at_pokemon_center, return_to_forest
+from create_leveled_state import heal_at_pokemon_center, travel_to
 from build_map_panorama import build
 
 # Re-runs the Viridian Forest survey now that its trainers are beatable.
@@ -40,7 +40,6 @@ from build_map_panorama import build
 # loop does for the levelling grind.
 
 MODEL_PATH = PROJECT_ROOT / "models" / "trainer_battle_dqn.zip"
-FOREST_MAP_ID = 51
 DIAGNOSTIC_STATE_PATH = PROJECT_ROOT / "saves" / "forest_survey_last_trainer.state"
 HEAL_BELOW_FRACTION = 0.85
 # pathfind.DEFAULT_MAX_TILES (1200) is well past what any other map here
@@ -65,6 +64,7 @@ TRAVEL_MAX_TILES = 10000
 def make_handle_battle(model):
     def handle_battle(pyboy):
         position = get_player_position(pyboy)
+        before_map = position["map_id"]
         before = get_detailed_battle_state(pyboy)
         print(
             f"  trainer at {(position['x'], position['y'])}: "
@@ -74,7 +74,7 @@ def make_handle_battle(model):
             f"Lv{before['enemy_mon_level']}"
         )
         # Kept for reproduction if this fight is the one that loses --
-        # the training states only ever cover the five trainers captured
+        # the training states only ever cover the six trainers captured
         # before this point, at full HP, so this is the only record of
         # what a fight further in (or fought while already worn down by
         # an earlier one, since nothing here heals between battles the
@@ -89,11 +89,14 @@ def make_handle_battle(model):
         wait_for_free_movement(pyboy)
 
         after_position = get_player_position(pyboy)
-        if after_position["map_id"] != FOREST_MAP_ID:
+        if after_position["map_id"] != before_map:
             # A loss blacks the party out to the last Pokemon Center,
             # which would otherwise look to the BFS like a legitimate
             # exit from this tile -- so the whole run is aborted rather
-            # than silently mislabeling a loss as forest topology. At
+            # than silently mislabeling a loss as map topology. Compared
+            # against whatever map the fight actually started on, not a
+            # hardcoded constant, since this same handler now gets reused
+            # to survey past the forest too (map 47, map 2, ...). At
             # 100/100 in evaluation this should not happen at full HP,
             # but that evaluation never fought two battles back to back
             # without healing in between, and this survey does.
@@ -110,7 +113,20 @@ def make_handle_battle(model):
     return handle_battle
 
 
-def make_heal_if_needed(handle_battle, min_fraction=HEAL_BELOW_FRACTION):
+def build_worker_handle_battle():
+    """
+    Top-level, zero-arg factory so a parallel_survey_map worker process
+    can build its own handle_battle rather than one being shared across
+    processes -- see core/parallel_survey.py for why. Loads its own copy
+    of the model rather than inheriting whatever the driver has loaded,
+    matching train_route1_agent_parallel.py's workers, which likewise
+    each build their own agent from scratch inside the child process.
+    """
+    model = DQN.load(str(MODEL_PATH))
+    return make_handle_battle(model)
+
+
+def make_heal_if_needed(handle_battle, target_map, min_fraction=HEAL_BELOW_FRACTION):
     """
     Called once per tile the survey is about to explore from. If HP is
     below `min_fraction`, travels all the way out to the Viridian Pokemon
@@ -119,6 +135,11 @@ def make_heal_if_needed(handle_battle, min_fraction=HEAL_BELOW_FRACTION):
     not a repeat of any actual fighting) before letting the survey
     continue -- `handle_battle` is threaded through the whole round trip
     in case a not-yet-discovered trainer sits somewhere along the way.
+
+    `target_map` is whichever map is actually being surveyed -- this
+    handler now gets reused past the forest itself (map 47, map 2, ...),
+    so "return to the forest" can't be hardcoded the way it first was;
+    the return leg is a plain travel_to(target_map) instead.
 
     Healing is best-effort, not mandatory. A heal attempted from (1, 15)
     failed to find map 50 identically at both a 2500 and a 10000 tile
@@ -150,15 +171,15 @@ def make_heal_if_needed(handle_battle, min_fraction=HEAL_BELOW_FRACTION):
                   f"a one-way barrier past this point; continuing unhealed")
             return False
 
-        if not return_to_forest(pyboy, handle_battle=handle_battle, max_tiles=TRAVEL_MAX_TILES):
-            print(f"    healed, but could not return to the forest from the "
+        if not travel_to(pyboy, target_map, handle_battle=handle_battle, max_tiles=TRAVEL_MAX_TILES):
+            print(f"    healed, but could not return to map {target_map} from the "
                   f"Pokemon Center; continuing from the pre-heal snapshot at {key}")
             return False
 
         if not walk_to_tile(pyboy, x, y, stay_on_map=True, handle_battle=handle_battle,
                              max_tiles=TRAVEL_MAX_TILES):
-            print(f"    healed and returned to the forest, but could not navigate "
-                  f"back to {key}; continuing from the pre-heal snapshot instead")
+            print(f"    healed and returned to map {target_map}, but could not "
+                  f"navigate back to {key}; continuing from the pre-heal snapshot instead")
             return False
 
         print(f"    back at {key}, HP{get_party_hp(pyboy)}/{get_party_max_hp(pyboy)} (healed)")
@@ -167,13 +188,34 @@ def make_heal_if_needed(handle_battle, min_fraction=HEAL_BELOW_FRACTION):
     return heal_if_needed
 
 
+def build_worker_heal_if_needed_for(target_map):
+    """
+    Bakes `target_map` into a top-level-style factory that a parallel
+    worker calls with its own freshly-built handle_battle -- needed
+    because heal_if_needed's own factory signature (handle_battle) ->
+    heal_if_needed has to match what parallel_survey_map expects, but
+    which map to return to after healing depends on what's being
+    surveyed and has to be decided before the survey starts.
+    """
+
+    def build_worker_heal_if_needed(handle_battle):
+        return make_heal_if_needed(handle_battle, target_map)
+
+    return build_worker_heal_if_needed
+
+
+FOREST_MAP_ID = 51
+
+
 def main():
-    model = DQN.load(str(MODEL_PATH))
-    handle_battle = make_handle_battle(model)
+    # Runs across this machine's full core count by default (see
+    # build_map_panorama.build's parallel=True) -- pass parallel=False
+    # only when specifically watching one process at a time, e.g. while
+    # debugging a change to handle_battle/heal_if_needed themselves.
     build(
         "leveled", "forest",
-        handle_battle=handle_battle,
-        heal_if_needed=make_heal_if_needed(handle_battle),
+        build_handle_battle=build_worker_handle_battle,
+        build_heal_if_needed=build_worker_heal_if_needed_for(FOREST_MAP_ID),
     )
 
 

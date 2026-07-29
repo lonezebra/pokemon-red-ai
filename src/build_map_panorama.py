@@ -5,6 +5,7 @@ from core.emulator import create_emulator, run_frames
 from core.state import load_state
 from core.config import PROJECT_ROOT, SCREENSHOT_DIR
 from core.pathfind import survey_map
+from core.parallel_survey import parallel_survey_map, NUM_WORKERS
 from core.panorama import stitch_panorama
 from core.memory import get_player_position
 
@@ -25,41 +26,70 @@ from core.memory import get_player_position
 # e.g.
 #   python src/build_map_panorama.py viridian_forest_entry forest
 
-MAX_TILES = 2500
+MAX_TILES = 5000  # bumped from 2500 -- the maps past Viridian Forest are
+# turning out bigger than anything measured before it
 
 
-def build(state_name, output_prefix, handle_battle=None, heal_if_needed=None):
+def build(state_name, output_prefix, build_handle_battle=None, build_heal_if_needed=None,
+          parallel=True, num_workers=NUM_WORKERS, max_tiles=MAX_TILES):
     """
-    `handle_battle` and `heal_if_needed`, if given, are passed straight
-    through to `survey_map` -- see there for what each is for. Needed for
-    any map (Viridian Forest) where a trainer occupies a tile the survey
-    would otherwise read as a permanent wall, and where fighting through
-    more than one or two of them means managing HP between fights too.
+    `build_handle_battle`/`build_heal_if_needed`, if given, are zero-arg
+    top-level factory functions -- `build_handle_battle()` returns a
+    handle_battle callable, `build_heal_if_needed(handle_battle)` returns
+    a heal_if_needed callable. Needed for any map (Viridian Forest and
+    beyond) where a trainer occupies a tile the survey would otherwise
+    read as a permanent wall, and where fighting through more than one or
+    two of them means managing HP between fights too. They have to be
+    factories rather than already-built instances so the parallel path
+    can hand each of its worker processes one built independently (see
+    core/parallel_survey.py for why); the sequential path just calls them
+    once itself.
+
+    `parallel=True` (the default) uses core.parallel_survey to split the
+    flood fill across `num_workers` processes instead of walking it one
+    tile at a time in this one -- this machine's full core count should
+    be the default for any survey, the same as it already is for
+    training, unless there's a specific reason to watch one process at a
+    time (debugging a new handle_battle/heal_if_needed, for instance).
     """
-    pyboy = create_emulator()
-    load_state(pyboy, PROJECT_ROOT / "saves" / f"{state_name}.state")
-    run_frames(pyboy, 30)
+    state_path = PROJECT_ROOT / "saves" / f"{state_name}.state"
 
-    start = get_player_position(pyboy)
-    print(f"Surveying map {start['map_id']} from {(start['x'], start['y'])}...")
+    if parallel:
+        tiles, exits, complete, frames, map_id = parallel_survey_map(
+            state_path, max_tiles=max_tiles,
+            build_handle_battle=build_handle_battle,
+            build_heal_if_needed=build_heal_if_needed,
+            capture_frames=True, num_workers=num_workers,
+        )
+    else:
+        pyboy = create_emulator()
+        load_state(pyboy, state_path)
+        run_frames(pyboy, 30)
 
-    frames = []
+        start = get_player_position(pyboy)
+        map_id = start["map_id"]
+        print(f"Surveying map {map_id} from {(start['x'], start['y'])}...")
 
-    def capture(emulator, x, y):
-        frames.append((x, y, emulator.screen.image.convert("RGB")))
+        frames = []
 
-    tiles, exits, complete = survey_map(
-        pyboy, max_tiles=MAX_TILES, on_visit=capture,
-        handle_battle=handle_battle, heal_if_needed=heal_if_needed,
-    )
-    pyboy.stop()
+        def capture(emulator, x, y):
+            frames.append((x, y, emulator.screen.image.convert("RGB")))
+
+        handle_battle = build_handle_battle() if build_handle_battle else None
+        heal_if_needed = build_heal_if_needed(handle_battle) if build_heal_if_needed else None
+
+        tiles, exits, complete = survey_map(
+            pyboy, max_tiles=max_tiles, on_visit=capture,
+            handle_battle=handle_battle, heal_if_needed=heal_if_needed,
+        )
+        pyboy.stop()
 
     print(f"Captured {len(frames)} tiles (survey complete={complete})")
     if not complete:
         print("Warning: hit the tile cap, so the panorama may be missing regions.")
 
     image, meta = stitch_panorama(frames)
-    meta["map_id"] = start["map_id"]
+    meta["map_id"] = map_id
     # The flood fill already knows every walkable tile, so record it
     # rather than throw it away -- a navigation env for this map gets its
     # reachable set (and so a sanity check on any recorded rollout)
