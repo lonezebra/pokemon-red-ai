@@ -23,6 +23,18 @@ from core.screen import save_gif
 # independently into their own files, then merges by averaging every
 # (state, action) value the workers actually formed an opinion on.
 
+# 'spawn', not this platform's 'fork' default -- Route 1/Route 2's own
+# envs never loaded a PyTorch model, so fork was never risky for them,
+# but core/parallel_survey.py hit a real, sustained-load-only hang from
+# forking a process that had already initialized PyTorch's own thread
+# pool (via the driver merely importing stable_baselines3 to reference a
+# model-loading function, not even calling it). Any env this trains that
+# loads a model internally -- Viridian Forest's, which auto-resolves
+# forced trainer battles with the already-solved trainer-battle DQN --
+# hits the exact same hazard, so it's fixed here too rather than waiting
+# to rediscover it on a long run.
+_SPAWN_CTX = mp.get_context("spawn")
+
 DEFAULT_NUM_WORKERS = 4
 DEFAULT_EPISODES_PER_ROUND = 100
 DEFAULT_MAX_ROUNDS = 500  # a generous cap, not an expected stopping point
@@ -195,7 +207,7 @@ def train(
         summary_paths = [worker_dir / f"worker{i}_summary.json" for i in range(num_workers)]
 
         processes = [
-            mp.Process(
+            _SPAWN_CTX.Process(
                 target=run_worker,
                 args=(
                     env_class,
