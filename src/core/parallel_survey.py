@@ -83,6 +83,11 @@ def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
     new_tiles = {}      # (x, y) -> snapshot bytes, for tiles not seen before this round
     exits = {}          # ((x, y), direction) -> (map_id, x, y)
     refreshed = {}      # (x, y) -> snapshot bytes, for an assigned tile healed to a new state
+    edges = {}          # ((x, y), direction) -> (x, y), every successful move tried this
+                         # round, not just ones landing on a first-discovered tile -- the
+                         # real walkable-adjacency graph, including any one-way edge (a
+                         # ledge can be walked down but not back up) a same-tile-distance
+                         # geometric guess would get wrong.
     frames = [] if capture_frames else None
 
     for key, snapshot in assigned:
@@ -104,6 +109,8 @@ def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
                 continue
 
             next_key = (position["x"], position["y"])
+            edges[(key, direction)] = next_key
+
             if next_key in new_tiles:
                 continue
 
@@ -116,7 +123,8 @@ def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
 
     with open(output_path, "wb") as f:
         pickle.dump(
-            {"new_tiles": new_tiles, "exits": exits, "refreshed": refreshed, "frames": frames},
+            {"new_tiles": new_tiles, "exits": exits, "refreshed": refreshed,
+             "edges": edges, "frames": frames},
             f,
         )
 
@@ -135,13 +143,20 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
     session to hand off partway through, since each worker needs its own
     separate PyBoy instance.
 
-    Returns (tiles, exits, complete, frames, start_map, states), matching
-    survey_map's own (tiles, exits, complete) plus the captured frames
-    (only populated if capture_frames=True), the map ID surveyed (so a
-    caller doesn't need to reload the state just to learn it), and the
+    Returns (tiles, exits, complete, frames, start_map, states, edges),
+    matching survey_map's own (tiles, exits, complete) plus the captured
+    frames (only populated if capture_frames=True), the map ID surveyed
+    (so a caller doesn't need to reload the state just to learn it), the
     full key -> snapshot-bytes map -- letting a caller jump straight to
     any discovered tile, including one just past an exit, by restoring
-    its snapshot and stepping across, rather than re-searching for it.
+    its snapshot and stepping across, rather than re-searching for it --
+    and the real walkable-adjacency graph as ((x, y), direction) -> (x,
+    y), every successful move actually tried during the survey rather
+    than just the spanning-tree edges used for first discovery. That
+    makes it exact (a one-way ledge shows up as present in one direction
+    and absent in the other) where guessing adjacency from tile geometry
+    alone would not, which matters for anything computing shortest-path
+    distances over the map, e.g. reward shaping for a navigation agent.
     """
 
     worker_dir = worker_dir or (PROJECT_ROOT / "models" / "parallel_survey_workers")
@@ -164,6 +179,7 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
     tiles = {start_key}
     states = {start_key: origin_snapshot}
     exits = {}
+    edges = {}
     queue = deque([start_key])
 
     round_num = 0
@@ -210,6 +226,7 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
                 new_this_round += 1
 
             exits.update(result["exits"])
+            edges.update(result["edges"])
 
             if capture_frames and result["frames"]:
                 frames.extend(result["frames"])
@@ -221,4 +238,4 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
             )
 
     complete = not queue
-    return tiles, exits, complete, frames, start_map, states
+    return tiles, exits, complete, frames, start_map, states, edges

@@ -55,7 +55,7 @@ def build(state_name, output_prefix, build_handle_battle=None, build_heal_if_nee
     state_path = PROJECT_ROOT / "saves" / f"{state_name}.state"
 
     if parallel:
-        tiles, exits, complete, frames, map_id, _states = parallel_survey_map(
+        tiles, exits, complete, frames, map_id, _states, edges = parallel_survey_map(
             state_path, max_tiles=max_tiles,
             build_handle_battle=build_handle_battle,
             build_heal_if_needed=build_heal_if_needed,
@@ -83,6 +83,7 @@ def build(state_name, output_prefix, build_handle_battle=None, build_heal_if_nee
             handle_battle=handle_battle, heal_if_needed=heal_if_needed,
         )
         pyboy.stop()
+        edges = None  # survey_map doesn't track the adjacency graph the parallel path does
 
     print(f"Captured {len(frames)} tiles (survey complete={complete})")
     if not complete:
@@ -100,6 +101,15 @@ def build(state_name, output_prefix, build_handle_battle=None, build_heal_if_nee
          "to": [dest[1], dest[2]]}
         for (tile, direction), dest in sorted(exits.items())
     ]
+    if edges is not None:
+        # The real walkable-adjacency graph, not tiles alone -- lets a
+        # navigation env's reward shaping compute an exact shortest-path
+        # distance to a goal tile instead of guessing from raw geometry,
+        # which would get a one-way ledge wrong in one direction.
+        meta["edges"] = [
+            {"from": list(tile), "direction": direction, "to": list(dest)}
+            for (tile, direction), dest in sorted(edges.items())
+        ]
 
     SCREENSHOT_DIR.mkdir(exist_ok=True)
     image_path = SCREENSHOT_DIR / f"{output_prefix}_map.png"

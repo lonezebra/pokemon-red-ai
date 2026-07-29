@@ -55,7 +55,7 @@ def cross(state_name, start_map, target_map, checkpoint_name):
           f"looking for an exit to map {target_map} ===")
 
     state_path = PROJECT_ROOT / "saves" / f"{state_name}.state"
-    tiles, exits, complete, _frames, map_id, states = parallel_survey_map(
+    tiles, exits, complete, _frames, map_id, states, _edges = parallel_survey_map(
         state_path, max_tiles=MAX_TILES,
         build_handle_battle=build_worker_handle_battle,
         build_heal_if_needed=functools.partial(build_worker_heal_if_needed, target_map=start_map),
