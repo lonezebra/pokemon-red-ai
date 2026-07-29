@@ -1,3 +1,5 @@
+import functools
+
 from stable_baselines3 import DQN
 
 from core.config import PROJECT_ROOT
@@ -188,20 +190,21 @@ def make_heal_if_needed(handle_battle, target_map, min_fraction=HEAL_BELOW_FRACT
     return heal_if_needed
 
 
-def build_worker_heal_if_needed_for(target_map):
+def build_worker_heal_if_needed(handle_battle, target_map):
     """
-    Bakes `target_map` into a top-level-style factory that a parallel
-    worker calls with its own freshly-built handle_battle -- needed
-    because heal_if_needed's own factory signature (handle_battle) ->
-    heal_if_needed has to match what parallel_survey_map expects, but
-    which map to return to after healing depends on what's being
-    surveyed and has to be decided before the survey starts.
+    heal_if_needed's own factory signature parallel_survey_map expects
+    is (handle_battle) -> heal_if_needed, but which map to return to
+    after healing depends on what's being surveyed and has to be decided
+    before the survey starts. Bind target_map via functools.partial at
+    the call site instead of a closure over it here -- a closure isn't
+    picklable at all, and parallel_survey_map's workers are spawned (a
+    real new interpreter re-importing everything, not forked via
+    copy-on-write) specifically to avoid a fork-after-threading-init
+    hazard PyTorch's own thread pool hit here once already, so anything
+    handed to a worker has to survive real pickling now, not just
+    fork's memory reuse.
     """
-
-    def build_worker_heal_if_needed(handle_battle):
-        return make_heal_if_needed(handle_battle, target_map)
-
-    return build_worker_heal_if_needed
+    return make_heal_if_needed(handle_battle, target_map)
 
 
 FOREST_MAP_ID = 51
@@ -215,7 +218,7 @@ def main():
     build(
         "leveled", "forest",
         build_handle_battle=build_worker_handle_battle,
-        build_heal_if_needed=build_worker_heal_if_needed_for(FOREST_MAP_ID),
+        build_heal_if_needed=functools.partial(build_worker_heal_if_needed, target_map=FOREST_MAP_ID),
     )
 
 

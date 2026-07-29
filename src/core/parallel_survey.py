@@ -8,6 +8,23 @@ from core.config import PROJECT_ROOT
 from core.memory import get_player_position
 from core.pathfind import _snapshot, _restore, _step, DIRECTIONS
 
+# Workers are created with the 'spawn' start method explicitly, not this
+# platform's 'fork' default. Found the hard way: a real run hung solid
+# after 26 healthy rounds, every stuck worker parked in a kernel
+# futex_wait -- the signature of forking a process that has already
+# initialized a threaded native runtime (PyTorch/OpenMP's own thread
+# pool here) elsewhere in memory, a well-documented fork hazard, not a
+# bug in this module's own logic. It only bit intermittently because the
+# driver process imports stable_baselines3 (to get a *reference* to a
+# build_handle_battle function to hand workers) before ever forking, so
+# torch gets initialized in the parent regardless of workers never
+# calling DQN.load() there themselves. 'spawn' starts each worker as a
+# brand new interpreter that imports everything itself, sidestepping the
+# hazard entirely -- exactly why build_handle_battle/build_heal_if_needed
+# were already required to be plain top-level functions rather than
+# closures: spawn needs real pickling, not fork's copy-on-write reuse.
+_SPAWN_CTX = mp.get_context("spawn")
+
 # Parallel counterpart to pathfind.survey_map, for this machine's full
 # core count rather than one.
 #
@@ -163,7 +180,7 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
 
         output_paths = [worker_dir / f"round{round_num}_worker{i}.pkl" for i in range(len(chunks))]
         processes = [
-            mp.Process(
+            _SPAWN_CTX.Process(
                 target=_run_worker,
                 args=(chunks[i], start_map, build_handle_battle, build_heal_if_needed,
                       output_paths[i], capture_frames),
