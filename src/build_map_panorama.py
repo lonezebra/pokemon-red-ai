@@ -55,7 +55,7 @@ def build(state_name, output_prefix, build_handle_battle=None, build_heal_if_nee
     state_path = PROJECT_ROOT / "saves" / f"{state_name}.state"
 
     if parallel:
-        tiles, exits, complete, frames, map_id = parallel_survey_map(
+        tiles, exits, complete, frames, map_id, _states = parallel_survey_map(
             state_path, max_tiles=max_tiles,
             build_handle_battle=build_handle_battle,
             build_heal_if_needed=build_heal_if_needed,

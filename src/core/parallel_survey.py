@@ -118,10 +118,13 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
     session to hand off partway through, since each worker needs its own
     separate PyBoy instance.
 
-    Returns (tiles, exits, complete, frames, start_map), matching
+    Returns (tiles, exits, complete, frames, start_map, states), matching
     survey_map's own (tiles, exits, complete) plus the captured frames
-    (only populated if capture_frames=True) and the map ID surveyed, so
-    a caller doesn't need to reload the state just to learn it.
+    (only populated if capture_frames=True), the map ID surveyed (so a
+    caller doesn't need to reload the state just to learn it), and the
+    full key -> snapshot-bytes map -- letting a caller jump straight to
+    any discovered tile, including one just past an exit, by restoring
+    its snapshot and stepping across, rather than re-searching for it.
     """
 
     worker_dir = worker_dir or (PROJECT_ROOT / "models" / "parallel_survey_workers")
@@ -201,4 +204,4 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
             )
 
     complete = not queue
-    return tiles, exits, complete, frames, start_map
+    return tiles, exits, complete, frames, start_map, states
