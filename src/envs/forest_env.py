@@ -1,3 +1,5 @@
+import re
+
 from stable_baselines3 import DQN
 
 from core.emulator import create_emulator, run_frames
@@ -17,6 +19,29 @@ from rewards.forest_rewards import (
 
 FOREST_ENTRY_STATE_PATH = PROJECT_ROOT / "saves" / "leveled.state"
 TRAINER_MODEL_PATH = PROJECT_ROOT / "models" / "trainer_battle_dqn.zip"
+TRAINER_BATTLE_STATE_DIR = PROJECT_ROOT / "saves" / "trainer_battles"
+
+
+def _load_known_trainer_tiles():
+    """
+    The player-side tiles create_trainer_battle_states.py found blocked by
+    a trainer, read back from the state files it captured there (one per
+    distinct trainer, named trainer_<x>_<y>.state). Gating the expensive
+    _try_engage_trainer probe (see core/pathfind.py) to only these tiles
+    is safe specifically because that capture ran over the same
+    exhaustively-surveyed forest (713/713 tiles, frontier fully
+    exhausted) that this env trains on: any trainer, anywhere reachable,
+    would already have been walked into and captured.
+    """
+    tiles = set()
+    for path in TRAINER_BATTLE_STATE_DIR.glob("trainer_*.state"):
+        match = re.match(r"trainer_(-?\d+)_(-?\d+)\.state", path.name)
+        if match:
+            tiles.add((int(match.group(1)), int(match.group(2))))
+    return tiles
+
+
+KNOWN_TRAINER_TILES = _load_known_trainer_tiles()
 
 
 class PokemonRedForestEnv:
@@ -63,6 +88,9 @@ class PokemonRedForestEnv:
         # or lose, the same as every other scripted interaction here.
         wait_for_free_movement(pyboy)
 
+    def _should_engage_trainer(self, before):
+        return (before["x"], before["y"]) in KNOWN_TRAINER_TILES
+
     def reset(self):
         load_state(self.pyboy, FOREST_ENTRY_STATE_PATH)
         run_frames(self.pyboy, 30)
@@ -82,7 +110,12 @@ class PokemonRedForestEnv:
         before = get_player_position(self.pyboy)
         direction = get_action_name(action_id)
 
-        moved = _step(self.pyboy, direction, handle_battle=self._handle_battle)
+        moved = _step(
+            self.pyboy,
+            direction,
+            handle_battle=self._handle_battle,
+            should_engage_trainer=self._should_engage_trainer,
+        )
 
         after = get_player_position(self.pyboy)
         reward = calculate_forest_reward(before=before, after=after)

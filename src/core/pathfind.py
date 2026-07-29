@@ -80,7 +80,7 @@ def _try_engage_trainer(pyboy, max_presses=12):
 WALL_RETRIES = 3
 
 
-def _step(pyboy, direction, handle_battle=None):
+def _step(pyboy, direction, handle_battle=None, should_engage_trainer=None):
     """
     One tile move, fleeing any wild encounter it triggers.
 
@@ -95,6 +95,16 @@ def _step(pyboy, direction, handle_battle=None):
     have trainers to find this way. If the handler clears the battle, the
     step is retried once, since the block was the trainer's presence, not
     the tile itself.
+
+    `should_engage_trainer(before_position)`, if given, gates the probe
+    itself: `_try_engage_trainer` costs up to 12 button presses times ~58
+    ticked frames each (~11s of real emulated time) every time it's
+    called, which is cheap for a bounded one-shot BFS (each tile's walls
+    are only ever bumped once -- see parallel_survey.py) but ruinous for
+    RL training, where a near-random early policy re-bumps the same
+    walls tens of thousands of times per round. Default (None) preserves
+    the old always-probe behavior for callers like the survey that rely
+    on it to find trainers with no prior knowledge of where they are.
 
     A move that still looks blocked after that gets a few more plain
     retries before it's accepted as a real wall. Every route and the
@@ -118,7 +128,7 @@ def _step(pyboy, direction, handle_battle=None):
     if is_in_battle(pyboy):
         attempt_run_from_wild_battle(pyboy)
     elif not moved and handle_battle is not None:
-        if _try_engage_trainer(pyboy):
+        if (should_engage_trainer is None or should_engage_trainer(before)) and _try_engage_trainer(pyboy):
             handle_battle(pyboy)
             moved = walk_tile(pyboy, direction, verbose=False)
             run_frames(pyboy, 6)
