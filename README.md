@@ -620,6 +620,84 @@ With the level ceiling and the stat-reroll bug both fixed,
 battle policy in this project: **100/100** wins over 100 greedy episodes,
 against the usual 90% bar.
 
+### Reaching Pewter City (`src/core/parallel_survey.py`, `src/create_pewter_city_entry_state.py`)
+
+Re-surveying Viridian Forest with beatable trainers (the previous
+milestone) found the forest's *real* shape, not just the dead end its
+unbeatable trainers had been hiding. Three things in a row, each verified
+before trusting the next:
+
+1. **A trainer the training set never saw.** Pressing on past the known
+   trainers, the survey lost a fight and blacked out. Replaying it
+   offline with frame-exact timing showed a genuine, deterministic loss
+   -- 0/10, then 0/5 more even at full HP -- against a Bug Catcher whose
+   real party (three Level 7 Pokemon) was tougher than anything in the
+   five captured training states. Captured it as a sixth state, folded
+   it into training: **100/100 overall, 20/20 individually against all
+   six trainers**, including this one.
+2. **A one-way section of the maze.** Past that trainer, healing trips
+   back to the Pokemon Center started failing -- not from running out of
+   search budget (raising it 4x changed nothing), but from a genuine
+   structural barrier, most likely a ledge. Healing was made best-effort
+   rather than fatal: a failed round trip is now just logged and the
+   survey keeps going at whatever HP it has, since past a point like that
+   retreating was never possible no matter the budget.
+3. **The forest's real exit.** With that fixed, the survey ran to
+   completion: **712 tiles, frontier exhausted**, and one exit that had
+   never shown up before -- a small connector room (map 47, 48 tiles),
+   leading to a previously unmapped stretch of Route 2 far north of
+   anywhere this project had walked (86 tiles), which in turn opens onto
+   **map 2**. The panorama of it shows labelled **GYM** and **MART**
+   buildings -- this is Pewter City, confirmed by what's actually drawn
+   on screen, not merely inferred from a map ID number the way Route 22
+   never should have been.
+
+**Parallelizing the search.** A single-process survey of Pewter City's
+~700 tiles was still running after five hours on one of this machine's
+four cores when its progress made the case for using all of them, the
+same way training already does (`train_route1_agent_parallel.py`).
+`core/parallel_survey.py` splits each round's BFS frontier across a
+worker pool of independent PyBoy processes, merging newly-found tiles
+and exits back into a shared frontier each round -- `build_map_panorama.
+build()` now defaults to this path for every map surveyed, forest
+included.
+
+Two real bugs surfaced only under sustained, real parallel load, not
+in short smoke tests:
+
+- Every worker's emulator pointed at the same ROM file, and PyBoy
+  auto-persists cartridge save-RAM to a file sitting right next to it.
+  Concurrent workers opening and truncating that *same* file produced a
+  bare "No data" crash for whichever one lost the race. This project
+  never uses that mechanism at all (every bit of state here goes through
+  explicit save-state snapshots), so each worker now gets an isolated,
+  in-memory buffer instead.
+- After 26 healthy rounds, a run hung solid, every stuck worker parked in
+  a kernel futex wait -- the signature of forking a process that has
+  already initialized a threaded native runtime (PyTorch's own thread
+  pool) elsewhere in memory. It bit intermittently because the driver
+  process imports `stable_baselines3` just to get a *reference* to a
+  battle-handling function to hand each worker, which is enough to
+  initialize torch in the parent before any forking happens. Workers are
+  now created via Python's `spawn` start method instead of this
+  platform's `fork` default -- a real new interpreter per worker,
+  sidestepping the hazard entirely.
+
+Both fixes were checked against known-good ground truth at increasing
+scale (150, then 500 tiles, matching the exact same exits every previous
+trusted run had found) before being trusted with the real, multi-hour
+survey.
+
+`create_pewter_city_entry_state.py` rebuilds the whole checkpoint chain
+-- forest, to the connector room, to the new Route 2 stretch, to Pewter
+City itself -- in one run, re-deriving whichever leg's checkpoint is
+missing rather than assuming a fixed starting point. It exists because a
+container restart wiped the mid-session checkpoints this exploration
+produced (though not the trained model, the git history, or any of it
+being findable again); with the parallel engine, redoing the whole trip
+takes minutes now rather than the hours the original single-process walk
+needed.
+
 ### Scouting scripts (the scaffolding, not the destination)
 
 A handful of scripts were how the coordinates and routes above were
@@ -721,19 +799,32 @@ Here's where this is headed, and why each step is designed the way it is.
     up" above. **100/100** in evaluation, but only after fixing a level
     ceiling the policy itself could never have solved: the party is now
     levelled to Lv10 first, via `create_leveled_state.py`.
-12. **Next up: re-survey Viridian Forest.** The 676-tile survey behind
-    item 10 could only see as far as the Bug Catchers block it, so its
-    "only exit leads back the way we came" result needs re-running now
-    that they're beatable — the actual path north to Pewter City is
-    still unconfirmed. The forest panorama used for the run mashups
-    (`build_map_panorama.py`) gets rebuilt at the same time, since the
-    current one still shows the trainers standing in place (the median
-    stitching only erases things that move between frames).
-13. **Later still**: Viridian Forest navigation once its real exit is
-    known, healing strategy (when to retreat/heal rather than push
-    through a fight), Pewter City, a new battle environment trained
-    specifically for Brock's Rock-type Pokemon, and eventually eight
-    badges and the Elite Four — each one added only once the step
+12. ~~Re-survey Viridian Forest now that its trainers are beatable, and
+    find the real path north to Pewter City.~~ **Done** — see "Reaching
+    Pewter City" above. A sixth, tougher trainer had to be captured and
+    folded into training first (100/100 across all six afterward), and
+    healing had to become best-effort once the survey ran into a genuine
+    one-way section of the maze. The forest's real exit — a small
+    connector room, then unmapped Route 2, then Pewter City itself,
+    confirmed by its labelled GYM and MART buildings — only showed up
+    once both were fixed.
+13. **Built along the way, not originally planned**: `core/
+    parallel_survey.py` splits any map survey across this machine's full
+    core count instead of one process at a time — a single-process
+    Pewter City survey was still running after five hours when this
+    became the obvious next investment. `build_map_panorama.build()`
+    defaults to it now for every map, forest included.
+14. **Next up**: a navigation agent for the newly-mapped stretch from
+    Viridian Forest through to Pewter City (nothing trained on this route
+    exists yet — the whole thing so far has been scripted survey/
+    checkpoint tooling, `create_pewter_city_entry_state.py`), then the
+    run-mashup GIF this project originally set out to build, rendered
+    onto the real panorama all the way to Pewter City.
+15. **Later still**: healing strategy as a *learned* policy (when to
+    retreat/heal rather than push through a fight, rather than the fixed
+    85% threshold the survey scaffolding uses), a new battle environment
+    trained specifically for Brock's Rock-type Pokemon, and eventually
+    eight badges and the Elite Four — each one added only once the step
     before it is actually working, not designed for prematurely.
 
 ## Try it yourself
