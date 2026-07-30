@@ -91,6 +91,20 @@ push_with_retries() {
         if git push -q -u origin "$BRANCH" 2>/dev/null; then
             return 0
         fi
+        # A rejected push usually means someone else (a collaborating
+        # session) pushed code to this branch. Without this, every push
+        # after theirs fails non-fast-forward forever, silently -- which is
+        # exactly how a full night of rounds once piled up locally while
+        # origin sat frozen and the remote monitor concluded the machine
+        # was asleep. Rebase our checkpoint commits (models/ artifacts,
+        # which nobody else writes) onto their code commits and retry;
+        # if the rebase itself fails, abort it cleanly and let the next
+        # tick try again rather than wedging the worktree.
+        git fetch -q origin "$BRANCH" 2>/dev/null || true
+        if ! git rebase -q "origin/$BRANCH" 2>/dev/null; then
+            git rebase --abort 2>/dev/null || true
+            log "push rejected and rebase failed; will retry next tick"
+        fi
         sleep "$delay"
         delay=$((delay * 2))
     done
