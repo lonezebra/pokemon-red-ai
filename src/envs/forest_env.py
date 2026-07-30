@@ -1,3 +1,4 @@
+import random
 import re
 
 from stable_baselines3 import DQN
@@ -76,9 +77,19 @@ class PokemonRedForestEnv:
     anywhere other than the forest or the connector room.
     """
 
-    def __init__(self, max_steps=1000):
+    def __init__(self, max_steps=1000, start_states=None):
+        """
+        start_states: optional list of save-state paths for reset() to
+        choose from uniformly, instead of always starting at the forest
+        entrance. This is what curriculum training varies -- see
+        tools/build_curriculum_states.py for how the near-goal states are
+        captured. None keeps the original entrance-only behaviour, so
+        every existing caller is unaffected.
+        """
         self.pyboy = create_emulator()
         self.max_steps = max_steps
+        self.start_states = list(start_states) if start_states else [FOREST_ENTRY_STATE_PATH]
+        self.start_state = None
         self.step_count = 0
         self.visited_positions = set()
         self.probed_trainer_moves = set()
@@ -136,7 +147,10 @@ class PokemonRedForestEnv:
         return True
 
     def reset(self):
-        load_state(self.pyboy, FOREST_ENTRY_STATE_PATH)
+        # Uniform over whatever the caller supplied; the single-entry
+        # default makes this the original fixed reset.
+        self.start_state = random.choice(self.start_states)
+        load_state(self.pyboy, self.start_state)
         run_frames(self.pyboy, 30)
 
         self.step_count = 0
@@ -188,6 +202,7 @@ class PokemonRedForestEnv:
             "reached_goal": reached_goal,
             "step_count": self.step_count,
             "min_distance": self.min_distance,
+            "start_state": self.start_state.name,
         }
 
         return self._get_observation(), reward, done, info
