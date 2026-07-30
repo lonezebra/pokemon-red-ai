@@ -3,6 +3,7 @@ import sys
 
 from core.emulator import create_emulator, run_frames
 from core.state import load_state
+from core.atomic_io import write_json_atomic
 from core.config import PROJECT_ROOT, SCREENSHOT_DIR
 from core.pathfind import survey_map
 from core.parallel_survey import parallel_survey_map, NUM_WORKERS
