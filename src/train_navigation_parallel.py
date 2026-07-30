@@ -9,6 +9,7 @@ from agents.q_learning_agent import QLearningAgent
 from actions import num_actions
 from core.atomic_io import write_json_atomic
 from core.config import PROJECT_ROOT
+from core.scheduling import apply_worker_qos, decide_yield, mark_decision_for_workers
 from core.screen import save_gif
 
 # Route-agnostic version of train_route1_agent_parallel.py, which was
@@ -245,6 +246,8 @@ def run_worker(env_class, remaining, epsilon, shared_table_path,
     # budget; workers only need to keep checking it.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
+    apply_worker_qos()
+
     env = env_class(max_steps=max_steps)
     agent = QLearningAgent(num_actions=num_actions())
 
@@ -441,8 +444,17 @@ def train(
     )
 
     signal.signal(signal.SIGINT, _request_graceful_stop)
+
+    # Decided once here, applied by each worker to itself -- see
+    # core/scheduling.py. A deliberately partial worker count means the
+    # user is keeping cores for themselves, and the cores they keep
+    # should be the machine's best tier, not whatever the scheduler
+    # happens to leave over.
+    yielding = decide_yield(num_workers)
+    mark_decision_for_workers(yielding)
+    tier_note = " (yielding the top core tier to you)" if yielding else ""
     print(
-        f"{num_workers} workers, {episodes_per_round} episodes per round. "
+        f"{num_workers} workers, {episodes_per_round} episodes per round.{tier_note} "
         f"Ctrl-C finishes the current round and saves it before exiting."
     )
 

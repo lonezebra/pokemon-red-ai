@@ -8,6 +8,7 @@ from core.state import load_state
 from core.config import PROJECT_ROOT
 from core.memory import get_player_position
 from core.pathfind import _snapshot, _restore, _step, DIRECTIONS
+from core.scheduling import apply_worker_qos, decide_yield, mark_decision_for_workers
 
 # Workers are created with the 'spawn' start method explicitly, not this
 # platform's 'fork' default. Found the hard way: a real run hung solid
@@ -96,6 +97,7 @@ def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
     copy of a trained model. `build_heal_if_needed` receives the
     handle_battle just built.
     """
+    apply_worker_qos()
     pyboy = create_emulator()
 
     handle_battle = build_handle_battle() if build_handle_battle else None
@@ -179,6 +181,11 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
     alone would not, which matters for anything computing shortest-path
     distances over the map, e.g. reward shaping for a navigation agent.
     """
+    # Same core-tier courtesy as training: a deliberately partial worker
+    # count means the user is keeping cores, and the kept cores should be
+    # the best ones. Decided here, applied by each worker to itself.
+    mark_decision_for_workers(decide_yield(num_workers))
+
 
     worker_dir = worker_dir or (PROJECT_ROOT / "models" / "parallel_survey_workers")
     worker_dir.mkdir(parents=True, exist_ok=True)
