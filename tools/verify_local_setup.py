@@ -85,29 +85,52 @@ def installed_version(module_name):
         return None
 
 
-def performance_core_count():
-    """
-    Physical performance cores, where that is knowable.
-
-    This matters more than it looks. Apple Silicon mixes performance and
-    efficiency cores, and os.cpu_count() reports every one of them --
-    but a training round joins all its workers before merging, so the
-    round takes as long as its *slowest* worker. Putting a worker on an
-    efficiency core therefore doesn't add throughput, it adds a
-    straggler the whole round waits on. On such a machine the right
-    worker count is the performance-core count, not the total.
-    """
-    if sys.platform == "darwin":
-        try:
-            out = subprocess.run(
-                ["sysctl", "-n", "hw.perflevel0.physicalcpu"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if out.returncode == 0 and out.stdout.strip().isdigit():
-                return int(out.stdout.strip())
-        except Exception:
-            pass
+def _sysctl(name):
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", name], capture_output=True, text=True, timeout=5
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        pass
     return None
+
+
+def core_tiers():
+    """
+    Every CPU performance tier macOS reports, fastest first, as a list of
+    (name, physical_core_count).
+
+    Apple Silicon is heterogeneous, and os.cpu_count() flattens that away.
+    It matters here because a training round is a barrier: the driver
+    joins every worker before merging, so the round takes as long as its
+    *slowest* worker. A worker placed on a much slower core doesn't add
+    throughput, it adds a straggler everyone waits on.
+
+    Read as an arbitrary number of tiers rather than the obvious two.
+    macOS exposes them as hw.perflevel0..N-1, ordered fastest first, with
+    hw.nperflevels giving the count -- and while two (performance plus
+    efficiency) has been the common layout, nothing in that interface
+    promises it. Hardcoding perflevel0 as "the fast cores" silently
+    ignores every tier below the top one, which on a three-tier part
+    would throw away a whole class of perfectly usable cores.
+    """
+    if sys.platform != "darwin":
+        return None
+
+    count = _sysctl("hw.nperflevels")
+    count = int(count) if count and count.isdigit() else 1
+
+    tiers = []
+    for level in range(count):
+        physical = _sysctl(f"hw.perflevel{level}.physicalcpu")
+        if not (physical and physical.isdigit()):
+            continue
+        name = _sysctl(f"hw.perflevel{level}.name") or f"perflevel{level}"
+        tiers.append((name, int(physical)))
+
+    return tiers or None
 
 
 print(f"\nPokemon Red AI -- local setup check")
@@ -263,14 +286,34 @@ except Exception as exc:
 
 print("\nParallelism")
 total = os.cpu_count() or 1
-p_cores = performance_core_count()
+tiers = core_tiers()
 print(f"  os.cpu_count() reports {total}")
-if p_cores:
-    print(f"  performance cores: {p_cores} (the rest are efficiency cores)")
-    print(f"  -> a round joins every worker before merging, so one worker on an")
-    print(f"     efficiency core becomes a straggler the whole round waits on.")
-    print(f"     Recommended:  POKEMON_RED_WORKERS={p_cores}")
-    recommended = p_cores
+
+if tiers and len(tiers) > 1:
+    for name, count in tiers:
+        print(f"    {count:2d} x {name}")
+    # Every tier except the slowest. On the common two-tier layout that
+    # is just the performance cores; on a three-tier part it keeps the
+    # middle tier too, which is the whole reason this isn't hardcoded to
+    # perflevel0. The slowest tier is excluded because it is the one
+    # far enough behind to turn a worker into a straggler the rest of
+    # the round waits on -- and because macOS prefers to schedule
+    # background work there anyway.
+    fast = sum(count for _, count in tiers[:-1])
+    slowest_name = tiers[-1][0]
+    recommended = max(1, fast)
+    print(f"  -> a round joins every worker before merging, so it runs at the")
+    print(f"     speed of its slowest worker. Excluding the {slowest_name} tier:")
+    print(f"     Recommended:  POKEMON_RED_WORKERS={recommended}")
+    if len(tiers) > 2:
+        print(f"     Note: with {len(tiers)} tiers the kept cores still differ in speed,")
+        print(f"     so workers on the slower kept tier finish later and the round")
+        print(f"     waits on them. Equal-episodes-per-worker is what makes that")
+        print(f"     cost real; see train_navigation_parallel.run_worker.")
+elif tiers:
+    recommended = max(1, tiers[0][1])
+    print(f"    {tiers[0][1]} x {tiers[0][0]} (single tier)")
+    print(f"  -> Recommended:  POKEMON_RED_WORKERS={recommended}")
 else:
     recommended = total
     print(f"  -> Recommended:  POKEMON_RED_WORKERS={recommended}")
