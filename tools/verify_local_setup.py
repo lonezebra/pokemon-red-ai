@@ -277,9 +277,26 @@ else:
 
 print(f"  each worker measured ~700MB resident here, so {recommended} workers "
       f"needs roughly {recommended * 0.7:.1f}GB")
-print(f"  with {recommended} workers, consider a shorter round too -- the merge")
-print(f"  averages every worker's Q-table, and averaging more independently")
-print(f"  diverged policies makes the greedy result less coherent, not more")
+
+try:
+    import train_navigation_parallel  # already on sys.path via SRC
+    target = train_navigation_parallel.TARGET_EPISODES_PER_ROUND
+    per_worker = max(
+        train_navigation_parallel.MIN_EPISODES_PER_WORKER, round(target / recommended)
+    )
+    print(f"  round size scales itself: {recommended} workers x {per_worker} episodes "
+          f"= {recommended * per_worker} episodes/round")
+    print(f"  (extra cores shorten rounds rather than enlarging them, so the same")
+    print(f"   epsilon schedule gets more merge points -- POKEMON_RED_EPISODES_PER_ROUND")
+    print(f"   overrides the {target}-episode target)")
+except Exception:
+    pass
+
+print()
+print("  Sharing the machine: every worker pins one core at ~100%, so leave")
+print("  headroom if you want the machine usable -- POKEMON_RED_WORKERS is read")
+print("  at launch, and training resumes from its last completed round, so")
+print("  stopping a run and relaunching with fewer workers loses nothing.")
 
 print()
 if failures:

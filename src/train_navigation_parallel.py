@@ -5,6 +5,7 @@ import multiprocessing as mp
 
 from agents.q_learning_agent import QLearningAgent
 from actions import num_actions
+from core.atomic_io import write_json_atomic
 from core.config import PROJECT_ROOT
 from core.screen import save_gif
 
@@ -50,7 +51,33 @@ _SPAWN_CTX = mp.get_context("spawn")
 # Memory is the other cap: each worker is a full PyBoy plus, for the
 # forest, its own copy of the trainer-battle DQN, ~700MB resident.
 DEFAULT_NUM_WORKERS = int(os.environ.get("POKEMON_RED_WORKERS") or (os.cpu_count() or 4))
-DEFAULT_EPISODES_PER_ROUND = 100
+
+# Extra cores go into *shorter rounds*, not bigger ones.
+#
+# A round is a barrier: every worker runs `episodes_per_round` episodes,
+# then the driver merges their tables and nobody sees anyone else's
+# learning until that happens. Holding episodes-per-worker fixed while
+# adding workers therefore leaves round length unchanged but quadruples
+# the episodes inside it -- more experience per merge, no more merges.
+# Holding the round's *total* fixed instead means 4x the workers finish
+# it in a quarter the time, so the same epsilon-per-episode schedule gets
+# 4x as many merge points and 4x the feedback.
+#
+# That direction also happens to help the failure actually observed here:
+# training success climbed steadily (0.5% -> 11.5% over four rounds)
+# while the greedy demo regressed (117 -> 59 tiles). Averaging four
+# independently-diverged Q-tables produces an argmax that need not be
+# good in any of their directions, and the longer workers run between
+# merges, the further they diverge before being averaged. Shorter rounds
+# resynchronize them more often.
+#
+# At 4 workers this yields 100, exactly the value used before, so the
+# container's own numbers stay comparable.
+TARGET_EPISODES_PER_ROUND = int(os.environ.get("POKEMON_RED_EPISODES_PER_ROUND") or 400)
+MIN_EPISODES_PER_WORKER = 10  # below this, merge overhead starts to dominate
+DEFAULT_EPISODES_PER_ROUND = max(
+    MIN_EPISODES_PER_WORKER, round(TARGET_EPISODES_PER_ROUND / DEFAULT_NUM_WORKERS)
+)
 
 # See core/parallel_survey.py for why: PyBoy is single-threaded and is
 # the bottleneck, so one compute thread per worker is what's wanted.
@@ -58,6 +85,7 @@ DEFAULT_EPISODES_PER_ROUND = 100
 # resulting oversubscription gets worse the more cores the machine has.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
+
 DEFAULT_MAX_ROUNDS = 500  # a generous cap, not an expected stopping point
 
 WARM_START_EPSILON = 0.3
@@ -130,8 +158,7 @@ def run_worker(env_class, episodes, epsilon, shared_table_path,
     env.close()
 
     agent.save(output_table_path)
-    with open(output_summary_path, "w") as f:
-        json.dump({"successes": successes, "episodes": episodes}, f)
+    write_json_atomic(output_summary_path, {"successes": successes, "episodes": episodes})
 
 
 def merge_tables(worker_table_paths, output_path):
@@ -151,22 +178,23 @@ def merge_tables(worker_table_paths, output_path):
         for key, per_action in accumulated.items()
     }
 
-    with open(output_path, "w") as f:
-        json.dump(merged, f)
+    write_json_atomic(output_path, merged)
 
 
 def save_progress(state_path, round_num, epsilon, total_episodes, successes, best_demo_key):
-    with open(state_path, "w") as f:
-        json.dump(
-            {
-                "round": round_num,
-                "epsilon": epsilon,
-                "total_episodes": total_episodes,
-                "successes": successes,
-                "best_demo_key": list(best_demo_key) if best_demo_key is not None else None,
-            },
-            f,
-        )
+    # Atomic, and written last in a round on purpose: this is the file
+    # tools/checkpoint_artifacts.sh watches to decide a round finished, so
+    # it must never appear complete while the Q-table beside it isn't.
+    write_json_atomic(
+        state_path,
+        {
+            "round": round_num,
+            "epsilon": epsilon,
+            "total_episodes": total_episodes,
+            "successes": successes,
+            "best_demo_key": list(best_demo_key) if best_demo_key is not None else None,
+        },
+    )
 
 
 def load_progress(state_path):

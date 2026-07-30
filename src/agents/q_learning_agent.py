@@ -1,4 +1,6 @@
 import json
+
+from core.atomic_io import write_json_atomic
 import random
 
 
@@ -81,8 +83,10 @@ class QLearningAgent:
         serializable = {f"{k[0]},{k[1]},{k[2]}": v for k, v in self.q_table.items()}
 
         path.parent.mkdir(exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(serializable, f, indent=2)
+        # Atomic: tools/checkpoint_artifacts.sh commits this file while
+        # training is still running, so a plain write leaves a window where
+        # the committed checkpoint is truncated and can't be resumed from.
+        write_json_atomic(path, serializable, indent=2)
 
     def load(self, path):
         with open(path) as f:

@@ -115,8 +115,10 @@ def build(state_name, output_prefix, build_handle_battle=None, build_heal_if_nee
     image_path = SCREENSHOT_DIR / f"{output_prefix}_map.png"
     meta_path = SCREENSHOT_DIR / f"{output_prefix}_map_meta.json"
     image.save(image_path)
-    with open(meta_path, "w") as f:
-        json.dump(meta, f)
+    # Atomic: rewards/forest_rewards.py reads this at import time, and a
+    # crash partway through a plain write leaves it truncated, which stops
+    # the forest environment from importing at all.
+    write_json_atomic(meta_path, meta)
 
     print(f"Saved {image_path} ({image.size[0]}x{image.size[1]})")
     print(f"Saved {meta_path}")
