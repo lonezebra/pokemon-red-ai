@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import multiprocessing as mp
 
 from agents.q_learning_agent import QLearningAgent
@@ -35,8 +36,28 @@ from core.screen import save_gif
 # to rediscover it on a long run.
 _SPAWN_CTX = mp.get_context("spawn")
 
-DEFAULT_NUM_WORKERS = 4
+# One worker per core, rather than the 4 this was written against, so
+# the same code uses whatever machine it lands on. POKEMON_RED_WORKERS
+# overrides it.
+#
+# Raising this trades two things off, and they pull in opposite
+# directions. More workers means more episodes per round, but the merge
+# averages every worker's Q-table together, and averaging more
+# independently-diverged policies makes the merged greedy policy less
+# coherent, not more -- so on a high-core machine, lowering
+# episodes_per_round to keep rounds short is usually a better use of the
+# cores than leaving it at 100 and quadrupling each round's length.
+# Memory is the other cap: each worker is a full PyBoy plus, for the
+# forest, its own copy of the trainer-battle DQN, ~700MB resident.
+DEFAULT_NUM_WORKERS = int(os.environ.get("POKEMON_RED_WORKERS") or (os.cpu_count() or 4))
 DEFAULT_EPISODES_PER_ROUND = 100
+
+# See core/parallel_survey.py for why: PyBoy is single-threaded and is
+# the bottleneck, so one compute thread per worker is what's wanted.
+# Without this, torch gives each worker one thread per core, and the
+# resulting oversubscription gets worse the more cores the machine has.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 DEFAULT_MAX_ROUNDS = 500  # a generous cap, not an expected stopping point
 
 WARM_START_EPSILON = 0.3

@@ -1,3 +1,4 @@
+import os
 import pickle
 import multiprocessing as mp
 from collections import deque
@@ -59,8 +60,28 @@ _SPAWN_CTX = mp.get_context("spawn")
 # state -- untested territory in this codebase, unlike the plain
 # JSON-table Q-learning workers that pattern was proven on.
 
-NUM_WORKERS = 4
+# One worker per core. This was written on a 4-core container, and a
+# hardcoded 4 left most of the CPU idle anywhere with more -- the whole
+# point of the parallel engine is to use what's actually available.
+# POKEMON_RED_WORKERS overrides it, for deliberately running smaller
+# (leaving cores free for something else, or reproducing a specific run).
+#
+# Worth knowing before raising this a lot: each worker is a full PyBoy
+# plus, for any map with trainers, its own copy of the trainer-battle
+# DQN, which measured ~700MB resident. 18 workers is therefore ~12.6GB,
+# so on a high-core machine memory, not cores, is usually the real cap.
+NUM_WORKERS = int(os.environ.get("POKEMON_RED_WORKERS") or (os.cpu_count() or 4))
 TILES_PER_WORKER_PER_ROUND = 20
+
+# PyBoy is the bottleneck here and it is single-threaded C, so each
+# worker wants exactly one compute thread. Torch otherwise defaults to
+# one thread per core *per process*: at 18 workers on 18 cores that is
+# 324 threads contending for 18 cores, which is slower than not
+# threading the model at all. Set before workers spawn so they inherit
+# it, since torch reads this at import time and the children re-import
+# everything from scratch under 'spawn'.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 
 def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
