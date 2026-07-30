@@ -5,7 +5,7 @@ from stable_baselines3 import DQN
 from core.config import PROJECT_ROOT
 from core.state import save_state
 from core.battle_runner import fight_current_battle
-from core.controls import wait_for_free_movement
+from core.controls import advance_battle_dialogue, wait_for_free_movement
 from core.pathfind import walk_to_tile
 from core.memory import (
     get_player_position,
@@ -67,6 +67,15 @@ def make_handle_battle(model):
     def handle_battle(pyboy):
         position = get_player_position(pyboy)
         before_map = position["map_id"]
+        # Enemy identity is read for the diagnostic only after the battle
+        # menu is actually open, not at battle start. The Pewter Gym survey
+        # showed why: every fight there logged the identical nonsense
+        # ("species 165 Lv2") because the enemy's data was read before the
+        # game finished writing it -- the same populate-then-read race that
+        # bit battle-type classification in pathfind. advance_battle_dialogue
+        # already exists to wait for exactly this moment, and the fight
+        # itself begins with it anyway, so reading afterwards costs nothing.
+        advance_battle_dialogue(pyboy)
         before = get_detailed_battle_state(pyboy)
         print(
             f"  trainer at {(position['x'], position['y'])}: "
