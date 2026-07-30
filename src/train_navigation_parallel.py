@@ -267,19 +267,34 @@ def run_worker(env_class, remaining, epsilon, shared_table_path,
 
         obs = env.reset()
         info = {}
+        transitions = []
 
         for _ in range(max_steps):
             action = agent.choose_action(obs)
             next_obs, reward, done, info = env.step(action)
-            agent.update(obs, action, reward, next_obs, done)
-            # Serialized exactly as QLearningAgent.save serializes keys,
-            # with the action appended, so the merge can line counts up
-            # with table entries without re-parsing anything.
-            key = f"{obs['map_id']},{obs['x']},{obs['y']}|{action}"
-            update_counts[key] = update_counts.get(key, 0) + 1
+            transitions.append((obs, action, reward, next_obs, done))
             obs = next_obs
             if done:
                 break
+
+        # Backward replay: apply the same one-step updates, but from the
+        # episode's end toward its start, so each update already sees its
+        # successor's fresh value. Forward, per-step updating moves a
+        # terminal outcome exactly one tile per episode -- against this
+        # forest's 127-hop horizon, the +100 at the goal and the large
+        # losses from fainting both crawled, and the greedy frontier sat
+        # pinned at distance ~93 for rounds while shallow values kept
+        # improving. Replayed backward, one episode propagates its own
+        # outcome along its entire length. Same update rule, same fixed
+        # point, no new hyperparameters; within-episode freshness is the
+        # only thing traded away, and epsilon-greedy never relied on it.
+        for obs_t, action_t, reward_t, next_obs_t, done_t in reversed(transitions):
+            agent.update(obs_t, action_t, reward_t, next_obs_t, done_t)
+            # Serialized exactly as QLearningAgent.save serializes keys,
+            # with the action appended, so the merge can line counts up
+            # with table entries without re-parsing anything.
+            key = f"{obs_t['map_id']},{obs_t['x']},{obs_t['y']}|{action_t}"
+            update_counts[key] = update_counts.get(key, 0) + 1
 
         agent.decay_epsilon()
         episodes_run += 1
