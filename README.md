@@ -698,6 +698,84 @@ being findable again); with the parallel engine, redoing the whole trip
 takes minutes now rather than the hours the original single-process walk
 needed.
 
+### Surviving a container restart (`.gitignore`, `tools/checkpoint_artifacts.sh`)
+
+This project develops inside an ephemeral container, and one restart
+rolled its filesystem back roughly a day. Everything committed and
+pushed came back untouched. Everything gitignored did not: the Viridian
+Forest survey meta, the Pewter City panorama and its checkpoint chain,
+and four rounds of forest navigation training (1600 episodes, up to an
+11.5% success rate) were simply gone.
+
+The most expensive part of that wasn't the lost progress, it was the
+lost *ability to make progress*. `rewards/forest_rewards.py` reads
+`screenshots/forest_map_meta.json` at import time to build its
+shortest-path distances, so with that file rolled back to a version
+predating the edge graph, the forest environment raised
+`KeyError: 'edges'` before an episode could even start. A restart didn't
+just cost work, it blocked the next attempt until an hour-long survey
+re-ran.
+
+`saves/`, `screenshots/`, and `models/` had been ignored wholesale,
+which is the normal instinct for directories full of binaries and
+generated output. They're now ignored *selectively*, by what it costs to
+rebuild:
+
+- **Tracked** — the 21 save states (each one a verified checkpoint that
+  took a scripted playthrough, sometimes a full survey, to reach), the
+  trained DQN policies, the Q-tables, the survey `*_meta.json` files,
+  and the panorama PNGs. The panoramas earn their place by being the
+  visual proof a map is what it claims to be — map 2 is Pewter City
+  because its panorama shows a labelled GYM and MART — and all 74 come
+  to under 300KB. Total: about 4MB.
+- **Ignored** — per-round worker scratch (`models/parallel_workers/`,
+  and 2MB-apiece `.pkl` survey dumps), 18MB of per-round training GIFs
+  that any later round supersedes, and the ROM (copyright, and the
+  environment supplies it).
+
+The `*_parallel_state.json` files matter far more than their 107 bytes
+suggest: `train_navigation_parallel.initial_state()` resumes a run from
+them, so tracking them next to the Q-table is what turns a restart into
+the loss of one round instead of an entire training run.
+
+Tracking only helps once the work is actually *pushed*, though, and
+rounds here take 40 minutes to 3 hours — long enough that "commit it
+later" is a real gamble. **`tools/checkpoint_artifacts.sh`** closes that
+window without touching the training loop: it watches
+`models/*_parallel_state.json` for a content change and commits and
+pushes the artifacts itself.
+
+Two details make it safe to leave running alongside training. It
+triggers on the *state* file rather than the Q-table because
+`train()` writes it last in a round, via `save_progress()`, after
+merging the worker tables and running the demo — so a new state file
+means the Q-table beside it is already finished, which watching the
+Q-table directly wouldn't guarantee. And it parses every JSON artifact
+before staging it, because `json.dump` isn't atomic: a tick landing
+mid-write would otherwise push a truncated Q-table, producing a
+checkpoint that looks valid but can't be resumed from.
+
+To recover after a restart:
+
+```bash
+# 1. Restore code and artifacts (the container's git may be rolled back too)
+git fetch origin claude/project-review-qa-4mis93
+git reset --hard origin/claude/project-review-qa-4mis93
+
+# 2. Confirm the forest environment can actually load -- this is the
+#    canary, since it depends on the survey meta's edge graph
+cd src && ../.venv/bin/python3 -c "from envs.forest_env import PokemonRedForestEnv"
+
+# 3. Resume training (initial_state() picks up from the committed round)
+nohup ../.venv/bin/python3 train_forest_agent.py > /tmp/train_forest.log 2>&1 &
+
+# 4. Re-arm automatic checkpointing
+nohup ../../tools/checkpoint_artifacts.sh > /tmp/checkpoint.log 2>&1 &
+```
+
+Step 2 is the one worth not skipping. A restart's damage shows up as an
+import error long before it shows up as bad training numbers.
+
 ### Scouting scripts (the scaffolding, not the destination)
 
 A handful of scripts were how the coordinates and routes above were
