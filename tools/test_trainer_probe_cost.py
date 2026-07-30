@@ -88,34 +88,64 @@ def main():
         return 1
 
     print(f"  blocked direction: {blocked_direction}")
-    print(f"\nBumping it {BUMPS} times\n")
 
+    # Finding the direction already engaged and beat the trainer, so from
+    # here the move is permanently blocked and any probe is guaranteed to
+    # burn all 12 presses without finding a battle. That is exactly the
+    # worst case worth measuring.
     action = direction_index(blocked_direction)
-    timings = []
-    for i in range(BUMPS):
+
+    def bump(clear_memory):
+        if clear_memory:
+            # Reproduces the old behavior: nothing remembers that this
+            # probe was already paid for, so _step pays it again.
+            env.probed_trainer_moves.discard((target, blocked_direction))
         start = time.time()
         env.step(action)
-        elapsed = time.time() - start
-        timings.append(elapsed)
-        probed = (target, blocked_direction) in env.probed_trainer_moves
-        print(f"  bump {i + 1}: {elapsed:6.2f}s   probe already spent: {probed}")
+        return time.time() - start
+
+    print(f"\nOld behavior -- probe memory cleared before each bump\n")
+    without_memory = []
+    for i in range(BUMPS):
+        elapsed = bump(clear_memory=True)
+        without_memory.append(elapsed)
+        print(f"  bump {i + 1}: {elapsed:6.2f}s")
+
+    print(f"\nNew behavior -- probe paid once per tile+direction per episode\n")
+    with_memory = []
+    for i in range(BUMPS):
+        elapsed = bump(clear_memory=False)
+        with_memory.append(elapsed)
+        print(f"  bump {i + 1}: {elapsed:6.2f}s")
 
     env.close()
 
-    first = timings[0]
-    rest = timings[1:]
+    old_median = statistics.median(without_memory)
+    new_median = statistics.median(with_memory)
     print()
-    print(f"  first bump:      {first:.2f}s  (probe + any fight)")
-    print(f"  later bumps:     median {statistics.median(rest):.2f}s, "
-          f"max {max(rest):.2f}s")
-    if statistics.median(rest) < first / 2:
-        saved = sum(first - t for t in rest)
-        print(f"  later bumps are much cheaper -- the probe is not being repaid")
-        print(f"  saved ~{saved:.0f}s across {len(rest)} bumps in this one sequence")
+    print(f"  re-probing every bump: median {old_median:6.2f}s")
+    print(f"  probing once:          median {new_median:6.2f}s")
+
+    if old_median <= 0:
+        print("  could not measure")
+        return 1
+
+    print(f"  speedup on a blocked bump: {old_median / max(new_median, 1e-6):.0f}x")
+
+    # A 2000-step episode spent bumping a beaten trainer, which is what a
+    # near-random policy does, is the case that looked like a freeze.
+    print()
+    print(f"  extrapolated over 2000 steps of bumping this one tile:")
+    print(f"    re-probing: {old_median * 2000 / 60:7.1f} min")
+    print(f"    probing once: {new_median * 2000 / 60:5.1f} min")
+
+    if new_median < old_median / 5:
+        print()
+        print("  Confirmed: the repeated probe was the cost, and it is gone.")
         return 0
 
-    print(f"  later bumps cost about as much as the first -- the probe is")
-    print(f"  still firing every time, which is the freeze this guards against")
+    print()
+    print("  Not the dominant cost here -- look elsewhere for the freeze.")
     return 1
 
 
