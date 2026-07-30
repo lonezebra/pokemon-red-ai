@@ -51,6 +51,23 @@ def _load_distances():
                 distances[neighbor] = distances[node] + 1
                 queue.append(neighbor)
 
+    # The warp strip above the goal tile. Stepping up from (1,1) exits to
+    # map 47, but the game walks the player through (1,0) first, and the
+    # env can observe that in-between frame as a forest-map position. The
+    # survey never records (1,0) -- it isn't a standable tile -- so
+    # without this entry it fell through to the worst-case anchor, making
+    # the two halves of a *successful* exit score -147 then +248: a
+    # seesaw that inflated goal-side Q-values past the legitimate ~101
+    # ceiling (190 observed live) and, once the inflation propagated
+    # backward through enough merges, collapsed the training success rate
+    # from 27% to 3% in a single round. Zero hops, same as the connector
+    # room it is halfway into: crossing (1,1) -> (1,0) -> map 47 then
+    # scores +1, 0, +100 -- one clean finish, no seesaw. The other maps'
+    # warp strips need no such entry: they lead to worst-case-anchored
+    # maps anyway, so their split steps sum to the same total as a direct
+    # exit.
+    distances[(1, 0)] = 0
+
     return distances
 
 
