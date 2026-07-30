@@ -80,6 +80,7 @@ class PokemonRedForestEnv:
         self.max_steps = max_steps
         self.step_count = 0
         self.visited_positions = set()
+        self.probed_trainer_moves = set()
         self.trainer_model = DQN.load(str(TRAINER_MODEL_PATH))
 
     def _handle_battle(self, pyboy):
@@ -88,8 +89,41 @@ class PokemonRedForestEnv:
         # or lose, the same as every other scripted interaction here.
         wait_for_free_movement(pyboy)
 
-    def _should_engage_trainer(self, before):
-        return (before["x"], before["y"]) in KNOWN_TRAINER_TILES
+    def _should_engage_trainer(self, before, direction):
+        """
+        Pay for the trainer probe at most once per tile-and-direction per
+        episode.
+
+        Restricting it to known trainer tiles wasn't enough, because Gen 1
+        leaves a defeated trainer standing on their tile, still blocking
+        it. So after the fight is won the move stays blocked forever, and
+        without this every later bump re-ran the full 12-press probe
+        (~11s of emulated time) that now cannot possibly succeed. A
+        near-random early policy bumps the same tile constantly, which is
+        an effective freeze rather than a slowdown -- workers pinned at
+        100% CPU making no progress.
+
+        Keying on the direction as well as the tile fixes a second, quieter
+        waste: a trainer-adjacent tile is usually a plain wall on its other
+        sides, and the tile-only version paid the probe for those too.
+
+        Once per episode is sufficient in both outcomes. If a live trainer
+        is there, the probe finds them, the fight happens, and they are
+        beaten -- probing again buys nothing. If it's a wall, it was a wall
+        the first time. Recording the attempt here rather than in the
+        caller keeps the bookkeeping next to the reason for it, at the cost
+        of a predicate that isn't purely a question.
+        """
+        tile = (before["x"], before["y"])
+        if tile not in KNOWN_TRAINER_TILES:
+            return False
+
+        attempt = (tile, direction)
+        if attempt in self.probed_trainer_moves:
+            return False
+
+        self.probed_trainer_moves.add(attempt)
+        return True
 
     def reset(self):
         load_state(self.pyboy, FOREST_ENTRY_STATE_PATH)
@@ -97,6 +131,10 @@ class PokemonRedForestEnv:
 
         self.step_count = 0
         self.visited_positions = set()
+        # Cleared per episode: reset() reloads a state where every trainer
+        # is undefeated again, so last episode's probes say nothing about
+        # this one.
+        self.probed_trainer_moves = set()
 
         position = get_player_position(self.pyboy)
         self.visited_positions.add(position_key(position))

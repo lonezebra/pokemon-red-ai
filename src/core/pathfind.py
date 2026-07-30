@@ -96,15 +96,19 @@ def _step(pyboy, direction, handle_battle=None, should_engage_trainer=None):
     step is retried once, since the block was the trainer's presence, not
     the tile itself.
 
-    `should_engage_trainer(before_position)`, if given, gates the probe
-    itself: `_try_engage_trainer` costs up to 12 button presses times ~58
-    ticked frames each (~11s of real emulated time) every time it's
-    called, which is cheap for a bounded one-shot BFS (each tile's walls
-    are only ever bumped once -- see parallel_survey.py) but ruinous for
-    RL training, where a near-random early policy re-bumps the same
-    walls tens of thousands of times per round. Default (None) preserves
-    the old always-probe behavior for callers like the survey that rely
-    on it to find trainers with no prior knowledge of where they are.
+    `should_engage_trainer(before_position, direction)`, if given, gates
+    the probe itself: `_try_engage_trainer` costs up to 12 button presses
+    times ~58 ticked frames each (~11s of real emulated time) every time
+    it's called, which is cheap for a bounded one-shot BFS (each tile's
+    walls are only ever bumped once -- see parallel_survey.py) but ruinous
+    for RL training, where a near-random early policy re-bumps the same
+    walls tens of thousands of times per round. It receives the direction
+    as well as the position because whether a probe is worth paying for
+    depends on which way the blocked move went: a tile can be adjacent to
+    a trainer on one side and a plain wall on the others. Default (None)
+    preserves the old always-probe behavior for callers like the survey
+    that rely on it to find trainers with no prior knowledge of where they
+    are.
 
     A move that still looks blocked after that gets a few more plain
     retries before it's accepted as a real wall. Every route and the
@@ -128,7 +132,10 @@ def _step(pyboy, direction, handle_battle=None, should_engage_trainer=None):
     if is_in_battle(pyboy):
         attempt_run_from_wild_battle(pyboy)
     elif not moved and handle_battle is not None:
-        if (should_engage_trainer is None or should_engage_trainer(before)) and _try_engage_trainer(pyboy):
+        if (
+            should_engage_trainer is None
+            or should_engage_trainer(before, direction)
+        ) and _try_engage_trainer(pyboy):
             handle_battle(pyboy)
             moved = walk_tile(pyboy, direction, verbose=False)
             run_frames(pyboy, 6)
