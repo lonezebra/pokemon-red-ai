@@ -2,7 +2,13 @@ import io
 from collections import deque
 
 from core.emulator import run_frames
-from core.controls import walk_tile, press_button, attempt_run_from_wild_battle, wait_for_position_to_settle
+from core.controls import (
+    walk_tile,
+    press_button,
+    attempt_run_from_wild_battle,
+    wait_for_position_to_settle,
+    clear_overworld_dialogue,
+)
 from core.memory import get_player_position, is_in_battle, get_battle_type
 
 # General-purpose overworld pathfinding scaffolding.
@@ -68,12 +74,33 @@ def _try_engage_trainer(pyboy, max_presses=12):
     tile. Only talking to them does, and their pre-battle line comes
     first, so the press has to repeat until the battle actually begins
     rather than checking once.
+
+    When no battle starts, the dialogue those presses opened has to be
+    closed again, or the caller is left unable to move at all. That is not
+    hypothetical: a trainer who has already been beaten still stands on
+    their tile in Gen 1, and talking to them gives a post-battle line
+    instead of a fight, so this loop exhausts its presses with a text box
+    left on screen. Every direction then reads as blocked, and an agent
+    reading that as "walls everywhere" simply stops making progress --
+    observed directly as workers appearing stuck in a trainer conversation.
+
+    A cannot be used to clear it, which is why this needs an explicit step
+    rather than one more press. A both advances text *and* starts
+    conversations, so pressing it while still facing the trainer closes one
+    box and opens the next; measured from a captured stuck state, eight A
+    presses left the player exactly as stuck, while eight B presses restored
+    movement. See core.controls.clear_overworld_dialogue and
+    tools/find_dialogue_recovery.py.
     """
     for _ in range(max_presses):
         press_button(pyboy, "a", hold_frames=12, release_frames=26)
         run_frames(pyboy, 20)
         if is_in_battle(pyboy):
             return get_battle_type(pyboy) == 2
+
+    # Only reached when no battle started, so this never interferes with a
+    # battle in progress -- the in-battle cases return above.
+    clear_overworld_dialogue(pyboy)
     return False
 
 
