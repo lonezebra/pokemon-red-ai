@@ -2,9 +2,49 @@
 __pycache__/
 *.pyc
 
-roms/
-saves/
-screenshots/
-models/
-
 .DS_Store
+
+# The ROM itself is never committed (copyright), and the environment
+# restores it rather than this repo.
+roms/
+
+# saves/, screenshots/, and models/ were fully ignored until a container
+# restart rolled the filesystem back roughly a day and destroyed work
+# that cost hours of compute -- most damagingly screenshots/
+# forest_map_meta.json, which rewards/forest_rewards.py reads at import
+# time, so losing it stopped the forest environment from even loading.
+# Everything the repo cannot rebuild for free is now tracked; only what
+# is genuinely cheap to regenerate, or pure per-round scratch, stays
+# ignored.
+
+# saves/: every .state is a verified checkpoint that took a scripted
+# playthrough (and sometimes a full survey) to reach. ~3.4MB, write-once.
+saves/**
+!saves/**/
+!saves/**/*.state
+
+# models/: the trained policies and, critically, the *_parallel_state
+# files -- train_navigation_parallel.initial_state() resumes a run from
+# those, so tracking them turns a restart into the loss of one round
+# rather than a whole training run. parallel_workers/ and
+# parallel_survey_workers/ are per-round scratch the next round
+# overwrites anyway, and the .pkl worker dumps are 2MB apiece.
+models/**
+!models/**/
+!models/*.zip
+!models/*_q_table.json
+!models/*_parallel_state.json
+models/parallel_workers/
+models/parallel_survey_workers/
+
+# screenshots/: the *_meta.json survey results are the expensive part --
+# tiles, exits, and the walkable-adjacency graph an exhaustive parallel
+# survey had to establish. The panorama PNGs are kept too, since they are
+# the visual proof a map is what it claims to be (map 2 is Pewter City
+# because its panorama shows a labelled GYM and MART), and all 74 of them
+# together are under 300KB. The GIFs are not: 18MB of per-round training
+# demos that any later round makes obsolete.
+screenshots/**
+!screenshots/**/
+!screenshots/**/*_meta.json
+!screenshots/**/*.png
