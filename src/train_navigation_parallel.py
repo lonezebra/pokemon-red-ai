@@ -253,6 +253,7 @@ def run_worker(env_class, remaining, epsilon, shared_table_path,
 
     successes = 0
     episodes_run = 0
+    update_counts = {}
 
     while True:
         # Claim one episode. The lock is held only for the decrement, not
@@ -270,6 +271,11 @@ def run_worker(env_class, remaining, epsilon, shared_table_path,
             action = agent.choose_action(obs)
             next_obs, reward, done, info = env.step(action)
             agent.update(obs, action, reward, next_obs, done)
+            # Serialized exactly as QLearningAgent.save serializes keys,
+            # with the action appended, so the merge can line counts up
+            # with table entries without re-parsing anything.
+            key = f"{obs['map_id']},{obs['x']},{obs['y']}|{action}"
+            update_counts[key] = update_counts.get(key, 0) + 1
             obs = next_obs
             if done:
                 break
@@ -285,24 +291,63 @@ def run_worker(env_class, remaining, epsilon, shared_table_path,
     write_json_atomic(
         output_summary_path, {"successes": successes, "episodes": episodes_run}
     )
+    write_json_atomic(str(output_table_path) + ".counts", update_counts)
 
 
 def merge_tables(worker_table_paths, output_path):
+    """
+    Visit-weighted average of the workers' Q-tables.
+
+    A plain average has a dilution problem that grows with the worker
+    count. Every worker starts a round from the same shared table, so a
+    worker that never visited some state finishes the round still holding
+    the inherited value -- and contributes it to the average with the same
+    weight as the one worker that actually learned something there. At 18
+    workers, a value only one worker updated moves toward its new estimate
+    at 1/18th of the intended rate. Observed directly: five consecutive
+    greedy demos frozen at exactly 115 tiles, nudges=0, while training
+    successes climbed from 10 to 34 per round -- the well-visited shallow
+    region kept learning while the deep-maze frontier was averaged back
+    into place every merge.
+
+    Each worker therefore reports how many times it updated each
+    (state, action) this round, and the merge weights contributions by
+    those counts, so untouched inherited copies contribute nothing. Where
+    nobody updated a value at all, it carries through unchanged (every
+    copy is the same inherited number). A worker table without a counts
+    sidecar falls back to weight 1 on every entry, which is exactly the
+    old behavior.
+    """
     accumulated = {}
 
     for path in worker_table_paths:
         with open(path) as f:
             table = json.load(f)
+        try:
+            with open(str(path) + ".counts") as f:
+                counts = json.load(f)
+        except FileNotFoundError:
+            counts = None
+
         for key, values in table.items():
             if key not in accumulated:
                 accumulated[key] = [[] for _ in values]
             for i, value in enumerate(values):
-                accumulated[key][i].append(value)
+                weight = 1 if counts is None else counts.get(f"{key}|{i}", 0)
+                accumulated[key][i].append((value, weight))
 
-    merged = {
-        key: [sum(values) / len(values) for values in per_action]
-        for key, per_action in accumulated.items()
-    }
+    merged = {}
+    for key, per_action in accumulated.items():
+        row = []
+        for entries in per_action:
+            total_weight = sum(weight for _, weight in entries)
+            if total_weight > 0:
+                row.append(
+                    sum(value * weight for value, weight in entries) / total_weight
+                )
+            else:
+                row.append(entries[0][0])
+        merged[key] = row
 
     write_json_atomic(output_path, merged)
 
