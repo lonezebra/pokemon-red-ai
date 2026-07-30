@@ -135,6 +135,24 @@ checkpoint_once() {
     git add -- "${ARTIFACT_PATHS[@]}" 2>/dev/null
 
     if git diff --cached --quiet 2>/dev/null; then
+        # Nothing new to commit -- but earlier rounds may still be sitting
+        # in local commits that never reached origin. This script only
+        # ever pushed as a side effect of making a commit, so a backlog
+        # created some other way (the dirty-tree stall above, cleared by
+        # a manual pull that left local ahead) stayed unpushed until the
+        # *next* round happened to produce a change. Rounds here run 40
+        # minutes to 3 hours, so that is a long time to look identical to
+        # a machine that has stopped working -- which is how this was
+        # missed the first time.
+        git fetch -q origin "$BRANCH" 2>/dev/null || true
+        if [ -n "$(git log --oneline "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then
+            log "local ahead of origin with nothing new to commit; pushing backlog"
+            if push_with_retries; then
+                log "pushed backlog: $(progress_summary)"
+            else
+                log "backlog push failed; will retry next tick"
+            fi
+        fi
         return
     fi
 
