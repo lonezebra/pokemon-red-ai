@@ -892,18 +892,48 @@ Here's where this is headed, and why each step is designed the way it is.
     Pewter City survey was still running after five hours when this
     became the obvious next investment. `build_map_panorama.build()`
     defaults to it now for every map, forest included.
-14. **Next up**: a navigation agent for the newly-mapped stretch from
-    Viridian Forest through to Pewter City (nothing trained on this route
-    exists yet — the whole thing so far has been scripted survey/
-    checkpoint tooling, `create_pewter_city_entry_state.py`), then the
-    run-mashup GIF this project originally set out to build, rendered
-    onto the real panorama all the way to Pewter City.
-15. **Later still**: healing strategy as a *learned* policy (when to
+14. **In progress**: a navigation agent for the newly-mapped stretch from
+    Viridian Forest toward Pewter City. Training is live as this is
+    written, and the maze has already taught more than the corridors ever
+    did: three real fixes came out of watching it struggle — a merge that
+    weights worker contributions by visit counts (18-way plain averaging
+    was silently diluting every rarely-visited value to 1/18th strength),
+    a demo loop-breaker whose *nudge count* keeps a rescued demo from
+    reading as a competent one, and a `depth` readout after
+    `tiles_visited` turned out to reward shallow wandering over deep
+    corridor-following. `tools/greedy_depth.py` simulates the greedy walk
+    offline against the survey's edge graph, so a stalled run is
+    diagnosed from its actual Q-values rather than guessed at. The
+    run-mashup GIF this project originally set out to build renders the
+    moment the table solves the maze — the pipeline
+    (`src/render_forest_mashup.py`) is built and smoke-tested.
+15. **Meanwhile, scripted scaffolding has pushed the frontier to Route 3.**
+    The trainer-battle DQN — trained only on six forest Bug Catchers —
+    beat Pewter Gym's wandering Jr Trainer and then Brock himself with
+    the Lv12 Squirtle (Bubble at 4x against his Rock/Ground line), first
+    try, no retraining. The Boulder Badge is verified by the badge byte
+    (0xD356, bit 0) and checkpointed as `saves/boulder_badge.state`; the
+    badge in turn opened Pewter's east road (the badge-less city survey
+    found no Route 3 exit because Gen 1's east-road NPC turns the
+    badgeless away — re-surveying with the badge gained exactly the four
+    east-edge tiles), and `saves/route3_entry.state` now stands at Mt.
+    Moon's doorstep. Per the project's rule, all of this is scaffolding:
+    the *learned* versions — a Brock battle environment, Route 3
+    navigation — are the actual milestones, now unblocked and cheap to
+    set up.
+16. **Before Vermilion City: catching Pokemon.** Badge 3's gym is locked
+    behind Cut, which needs a Pokemon to learn it, so catching stops
+    being optional at that point. It slots in after the forest/Brock
+    work, scripted first (`create_caught_pokemon_state.py`-style
+    scaffolding, exactly like every checkpoint before it); whether
+    *catch decisions* ever become learned behavior is a later question
+    that nothing yet forces.
+17. **Later still**: healing strategy as a *learned* policy (when to
     retreat/heal rather than push through a fight, rather than the fixed
-    85% threshold the survey scaffolding uses), a new battle environment
-    trained specifically for Brock's Rock-type Pokemon, and eventually
-    eight badges and the Elite Four — each one added only once the step
-    before it is actually working, not designed for prematurely.
+    85% threshold the survey scaffolding uses), a learned Brock battle
+    policy from `saves/brock_battle.state`, and eventually eight badges
+    and the Elite Four — each one added only once the step before it is
+    actually working, not designed for prematurely.
 
 ## Try it yourself
 
