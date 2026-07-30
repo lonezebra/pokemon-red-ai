@@ -97,18 +97,22 @@ def _step(pyboy, direction, handle_battle=None, should_engage_trainer=None):
     the tile itself.
 
     `should_engage_trainer(before_position, direction)`, if given, gates
-    the probe itself: `_try_engage_trainer` costs up to 12 button presses
-    times ~58 ticked frames each (~11s of real emulated time) every time
-    it's called, which is cheap for a bounded one-shot BFS (each tile's
-    walls are only ever bumped once -- see parallel_survey.py) but ruinous
-    for RL training, where a near-random early policy re-bumps the same
-    walls tens of thousands of times per round. It receives the direction
-    as well as the position because whether a probe is worth paying for
-    depends on which way the blocked move went: a tile can be adjacent to
-    a trainer on one side and a plain wall on the others. Default (None)
-    preserves the old always-probe behavior for callers like the survey
-    that rely on it to find trainers with no prior knowledge of where they
-    are.
+    the probe itself. `_try_engage_trainer` spends up to 12 button presses
+    of ~58 ticked frames each, which measures at roughly 0.2s of wall time
+    (headless PyBoy runs about fifty times real-time, so its ~11s of
+    *emulated* time is not 11s of anything a person waits for -- see
+    tools/test_trainer_probe_cost.py, written after an earlier estimate
+    here confused the two). That is negligible for a bounded one-shot BFS,
+    where each tile's walls are only ever bumped once, but it adds up in RL
+    training, where a near-random policy re-bumps the same walls tens of
+    thousands of times per round.
+
+    It receives the direction as well as the position because whether a
+    probe is worth paying for depends on which way the blocked move went:
+    a tile can be adjacent to a trainer on one side and plain wall on the
+    others. Default (None) preserves the old always-probe behavior for
+    callers like the survey that rely on it to find trainers with no prior
+    knowledge of where they are.
 
     A move that still looks blocked after that gets a few more plain
     retries before it's accepted as a real wall. Every route and the

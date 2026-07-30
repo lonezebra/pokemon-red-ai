@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import random
 import signal
 import multiprocessing as mp
 
@@ -95,23 +96,60 @@ DEMO_MAX_FRAMES = 300
 WORKER_DIR = PROJECT_ROOT / "models" / "parallel_workers"
 
 
+DEMO_STUCK_LIMIT = 8
+
+
 def run_demo_episode(env, agent, max_steps):
     """
-    One greedy (no exploration) episode, capturing a frame per step, so
-    progress can actually be watched -- this project runs headless, so a
-    stitched GIF is the closest thing to looking over its shoulder.
-    Subsampled if the episode runs long, so a slow early episode doesn't
-    produce an enormous file.
+    One near-greedy episode, capturing a frame per step, so progress can
+    actually be watched -- this project runs headless, so a stitched GIF is
+    the closest thing to looking over its shoulder. Subsampled if the
+    episode runs long, so a slow early episode doesn't produce an enormous
+    file.
+
+    Near-greedy rather than purely greedy, because a purely greedy demo
+    deadlocks by construction. The observation is exactly (map_id, x, y),
+    so if the Q-table's argmax at some tile points into a wall or a
+    trainer, the step doesn't move, the next observation is *identical*,
+    the argmax is therefore identical, and the episode spends its entire
+    step budget bumping one tile. Nothing breaks the cycle: unlike
+    training, a demo performs no updates, so the action's value never
+    drops. This is what "all the workers are stuck on a trainer" looked
+    like, and it also explains demos reporting steps=2000 with a handful
+    of tiles visited while the training success rate was climbing --
+    training uses epsilon-greedy and escapes on its own.
+
+    After DEMO_STUCK_LIMIT steps without the position changing, one random
+    action is taken to break out. The count of those nudges is returned,
+    and it is the more useful number of the two: a policy that reaches the
+    goal with zero nudges is genuinely solving the maze, while one that
+    needs dozens is being carried by them. Reporting it keeps the
+    loop-breaker from quietly flattering the agent.
     """
 
     obs = env.reset()
     frames = [env.pyboy.screen.image.copy()]
     info = {}
 
+    # Seeded per demo so a round's demo is reproducible from its Q-table.
+    rng = random.Random(0)
+    stuck_for = 0
+    nudges = 0
+
     for _ in range(max_steps):
-        action = agent.choose_action(obs, greedy=True)
+        if stuck_for >= DEMO_STUCK_LIMIT:
+            action = rng.randrange(num_actions())
+            nudges += 1
+            stuck_for = 0
+        else:
+            action = agent.choose_action(obs, greedy=True)
+
+        previous_obs = obs
         obs, _, done, info = env.step(action)
         frames.append(env.pyboy.screen.image.copy())
+
+        stuck_for = stuck_for + 1 if obs == previous_obs else 0
+
         if done:
             break
 
@@ -124,6 +162,7 @@ def run_demo_episode(env, agent, max_steps):
         "reached_goal": info.get("reached_goal", False),
         "tiles_visited": len(env.visited_positions),
         "steps": info.get("step_count", 0),
+        "nudges": nudges,
     }
 
 
@@ -443,7 +482,8 @@ def train(
             save_gif(demo["frames"], f"{gif_prefix}_progress_round{round_num:03d}.gif")
             print(
                 f"  [demo] reached_goal={demo['reached_goal']} "
-                f"tiles_visited={demo['tiles_visited']} steps={demo['steps']}"
+                f"tiles_visited={demo['tiles_visited']} steps={demo['steps']} "
+                f"nudges={demo['nudges']}"
             )
 
             demo_key = (demo["reached_goal"], demo["tiles_visited"], -demo["steps"])

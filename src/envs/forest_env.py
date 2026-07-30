@@ -97,11 +97,20 @@ class PokemonRedForestEnv:
         Restricting it to known trainer tiles wasn't enough, because Gen 1
         leaves a defeated trainer standing on their tile, still blocking
         it. So after the fight is won the move stays blocked forever, and
-        without this every later bump re-ran the full 12-press probe
-        (~11s of emulated time) that now cannot possibly succeed. A
-        near-random early policy bumps the same tile constantly, which is
-        an effective freeze rather than a slowdown -- workers pinned at
-        100% CPU making no progress.
+        without this every later bump re-ran the full 12-press probe that
+        now cannot possibly succeed.
+
+        Measured rather than assumed, since the first estimate of this was
+        badly wrong: a re-probed blocked bump costs 0.28s of wall time
+        against 0.09s without, so roughly 3x, not the two orders of
+        magnitude that "12 presses, ~11s of emulated time" suggests.
+        Headless PyBoy runs about fifty times real-time, so emulated
+        seconds are not wall seconds -- an easy conflation to make when
+        reasoning about frame counts instead of measuring.
+        tools/test_trainer_probe_cost.py is that measurement. 3x on a move
+        a near-random policy retries constantly is worth having, but it is
+        an efficiency fix and nothing more; it was not the cause of workers
+        appearing stuck on a trainer.
 
         Keying on the direction as well as the tile fixes a second, quieter
         waste: a trainer-adjacent tile is usually a plain wall on its other
