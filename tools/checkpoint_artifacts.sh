@@ -101,9 +101,24 @@ push_with_retries() {
         # if the rebase itself fails, abort it cleanly and let the next
         # tick try again rather than wedging the worktree.
         git fetch -q origin "$BRANCH" 2>/dev/null || true
-        if ! git rebase -q "origin/$BRANCH" 2>/dev/null; then
+        # --autostash because git refuses to rebase with a dirty working
+        # tree, and this script only ever commits ARTIFACT_PATHS: an
+        # unrelated uncommitted edit to source (a hand-tweaked
+        # hyperparameter, say) leaves the tree permanently dirty and made
+        # every rebase fail, which stalled origin at round 61 while
+        # training ran on. Autostash shelves that edit for the duration
+        # and restores it afterward, so the user's work in progress is
+        # neither lost nor in the way.
+        #
+        # The error is captured and logged rather than discarded. The
+        # previous version sent it to /dev/null, so the one line that
+        # would have identified this immediately was thrown away and the
+        # cause had to be inferred from the outside.
+        local rebase_error
+        if ! rebase_error="$(git rebase --autostash "origin/$BRANCH" 2>&1)"; then
             git rebase --abort 2>/dev/null || true
             log "push rejected and rebase failed; will retry next tick"
+            log "  git: $(echo "$rebase_error" | grep -v '^$' | tail -3 | tr '\n' ' ')"
         fi
         sleep "$delay"
         delay=$((delay * 2))
