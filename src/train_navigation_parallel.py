@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import signal
 import multiprocessing as mp
 
 from agents.q_learning_agent import QLearningAgent
@@ -126,6 +127,50 @@ def run_demo_episode(env, agent, max_steps):
     }
 
 
+_STOP_REQUESTED = False
+_CURRENT_BUDGET = None
+
+
+def _request_graceful_stop(signum, frame):
+    """
+    Turn Ctrl-C into "finish this round, save it, then exit".
+
+    Interrupting used to throw the whole in-flight round away: the merge
+    and save_progress only run once every worker has finished, so a round
+    killed partway through left nothing behind. With rounds lasting from
+    forty minutes to a few hours, that made stopping training to free the
+    machine up genuinely expensive -- which is the normal thing to want on
+    a machine that is also used for other things.
+
+    Draining the shared budget is all a graceful stop needs, which is a
+    property the queue gets for free: workers check the budget between
+    episodes, so zeroing it makes each of them finish the episode it is on
+    and exit normally. The driver then merges and saves exactly as it
+    would at the end of any round, and stops instead of starting another.
+    Worst case the interrupt costs one episode per worker rather than a
+    whole round.
+
+    A second Ctrl-C escalates to the old behavior, so a wedged episode
+    can't trap someone who genuinely needs the cores back now.
+    """
+    global _STOP_REQUESTED
+
+    if _STOP_REQUESTED:
+        raise KeyboardInterrupt("second interrupt: abandoning the round")
+
+    _STOP_REQUESTED = True
+
+    if _CURRENT_BUDGET is not None:
+        with _CURRENT_BUDGET.get_lock():
+            _CURRENT_BUDGET.value = 0
+
+    print(
+        "\nStopping: letting workers finish the episodes they're on, then "
+        "merging and saving this round before exiting. Ctrl-C again to "
+        "abandon the round instead."
+    )
+
+
 def run_worker(env_class, remaining, epsilon, shared_table_path,
                output_table_path, output_summary_path, max_steps):
     """
@@ -153,6 +198,13 @@ def run_worker(env_class, remaining, epsilon, shared_table_path,
     longer inferable and the driver needs the real total for its epsilon
     schedule and its success accounting.
     """
+    # The terminal delivers Ctrl-C to the whole foreground process group,
+    # so without this every worker would die on the signal before it could
+    # save what it had learned -- defeating the graceful stop entirely. The
+    # driver owns the interrupt and coordinates shutdown by draining the
+    # budget; workers only need to keep checking it.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     env = env_class(max_steps=max_steps)
     agent = QLearningAgent(num_actions=num_actions())
 
@@ -279,11 +331,19 @@ def train(
     episodes_per_round=DEFAULT_EPISODES_PER_ROUND,
     max_rounds=DEFAULT_MAX_ROUNDS,
 ):
+    global _CURRENT_BUDGET
+
     worker_dir = WORKER_DIR / gif_prefix
     worker_dir.mkdir(parents=True, exist_ok=True)
 
     start_round, epsilon, total_episodes, successes, best_demo_key = initial_state(
         state_path, model_path
+    )
+
+    signal.signal(signal.SIGINT, _request_graceful_stop)
+    print(
+        f"{num_workers} workers, {episodes_per_round} episodes per round. "
+        f"Ctrl-C finishes the current round and saves it before exiting."
     )
 
     for round_num in range(start_round, max_rounds + 1):
@@ -294,6 +354,7 @@ def train(
         # worker is free. Created from the spawn context so the shared
         # lock survives being passed to spawned children.
         remaining = _SPAWN_CTX.Value("i", episodes_per_round)
+        _CURRENT_BUDGET = remaining
 
         processes = [
             _SPAWN_CTX.Process(
@@ -312,8 +373,20 @@ def train(
         ]
         for process in processes:
             process.start()
-        for process in processes:
-            process.join()
+        try:
+            for process in processes:
+                process.join()
+        except KeyboardInterrupt:
+            # A second Ctrl-C during the drain. Workers ignore SIGINT, so
+            # they have to be stopped explicitly, and nothing from this
+            # round is trustworthy afterwards -- the last completed round
+            # is still safely on disk.
+            print("Abandoning this round; the last saved round is unaffected.")
+            for process in processes:
+                process.terminate()
+            for process in processes:
+                process.join()
+            return
 
         merge_tables(table_paths, model_path)
 
@@ -356,25 +429,38 @@ def train(
             f"cumulative: {successes}/{total_episodes}{spread}"
         )
 
-        demo_env = env_class(max_steps=max_steps)
-        demo_agent = QLearningAgent(num_actions=num_actions())
-        demo_agent.load(model_path)
-        demo = run_demo_episode(demo_env, demo_agent, max_steps)
-        demo_env.close()
+        # Skipped when stopping: the demo is an observability nicety, not
+        # part of the checkpoint, and someone who just asked for their
+        # cores back shouldn't wait a whole extra episode for a GIF. The
+        # previous best_demo_key carries forward untouched.
+        if not _STOP_REQUESTED:
+            demo_env = env_class(max_steps=max_steps)
+            demo_agent = QLearningAgent(num_actions=num_actions())
+            demo_agent.load(model_path)
+            demo = run_demo_episode(demo_env, demo_agent, max_steps)
+            demo_env.close()
 
-        save_gif(demo["frames"], f"{gif_prefix}_progress_round{round_num:03d}.gif")
-        print(
-            f"  [demo] reached_goal={demo['reached_goal']} "
-            f"tiles_visited={demo['tiles_visited']} steps={demo['steps']}"
-        )
+            save_gif(demo["frames"], f"{gif_prefix}_progress_round{round_num:03d}.gif")
+            print(
+                f"  [demo] reached_goal={demo['reached_goal']} "
+                f"tiles_visited={demo['tiles_visited']} steps={demo['steps']}"
+            )
 
-        demo_key = (demo["reached_goal"], demo["tiles_visited"], -demo["steps"])
-        if best_demo_key is None or demo_key > best_demo_key:
-            best_demo_key = demo_key
-            save_gif(demo["frames"], f"{gif_prefix}_best_so_far.gif")
-            print(f"  [demo] new best so far (round {round_num})")
+            demo_key = (demo["reached_goal"], demo["tiles_visited"], -demo["steps"])
+            if best_demo_key is None or demo_key > best_demo_key:
+                best_demo_key = demo_key
+                save_gif(demo["frames"], f"{gif_prefix}_best_so_far.gif")
+                print(f"  [demo] new best so far (round {round_num})")
 
         save_progress(state_path, round_num, epsilon, total_episodes, successes, best_demo_key)
+
+        if _STOP_REQUESTED:
+            print(
+                f"Saved through round {round_num}. Relaunching resumes from "
+                f"round {round_num + 1} -- with a different worker count if you "
+                f"want, since it's read at launch."
+            )
+            return
 
     print()
     print(f"Finished {max_rounds} rounds. Total successes: {successes}/{total_episodes}")
