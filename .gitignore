@@ -19,9 +19,18 @@ roms/
 
 # saves/: every .state is a verified checkpoint that took a scripted
 # playthrough (and sometimes a full survey) to reach. ~3.4MB, write-once.
+#
+# forest_survey_last_trainer.state is the exception, and the reason the
+# rule can't just be "all .state files": survey_viridian_forest.py dumps
+# it on every trainer encounter purely so a failure can be inspected
+# afterwards (nothing ever loads it back), so it's rewritten every few
+# minutes for the length of a survey. Tracking it means a running survey
+# leaves the working tree permanently dirty with a file no restart would
+# ever want restored.
 saves/**
 !saves/**/
 !saves/**/*.state
+saves/forest_survey_last_trainer.state
 
 # models/: the trained policies and, critically, the *_parallel_state
 # files -- train_navigation_parallel.initial_state() resumes a run from
