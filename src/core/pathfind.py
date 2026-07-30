@@ -62,6 +62,66 @@ def _restore(pyboy, data):
     run_frames(pyboy, 2)
 
 
+def _settled_battle_type(pyboy, max_polls=20):
+    """
+    The battle type, once it has stopped changing.
+
+    `is_in_battle` and `get_battle_type` read the *same* byte: the flag is
+    "non-zero" and the type is the value (1 = wild, 2 = trainer). Code that
+    tests the flag and immediately reads the type is therefore reading one
+    byte twice during a transition, and can catch it before the game has
+    written the value it settles on.
+
+    That race is not theoretical. Misreading it meant a trainer battle was
+    classified as something else, so nothing fought it -- and nothing could,
+    because Gen 1 forbids fleeing a trainer. Every later step tried to run,
+    failed, and left the text box up with its cursor blinking while the
+    episode burned its remaining steps doing nothing.
+
+    Polls until two consecutive reads agree on a real value rather than
+    waiting a fixed number of frames, since how long the transition takes is
+    exactly the thing not worth guessing at.
+    """
+    previous = None
+    for _ in range(max_polls):
+        current = get_battle_type(pyboy)
+        if current in (1, 2) and current == previous:
+            return current
+        previous = current
+        run_frames(pyboy, 5)
+    return get_battle_type(pyboy)
+
+
+def _resolve_any_battle(pyboy, handle_battle=None):
+    """
+    Leave no battle unresolved, whatever kind it turns out to be.
+
+    The invariant: `_step` never returns with the emulator still in a battle.
+    Breaking it is unrecoverable rather than merely wasteful, because a
+    caller that walks away from a trainer battle can only try to flee on
+    later steps, and fleeing a trainer is impossible -- so the run wedges
+    permanently instead of degrading.
+
+    A misclassified battle is therefore fought rather than abandoned. If
+    fleeing fails and a handler exists, the handler is used even for what
+    looked like a wild encounter: winning a fight we did not mean to pick
+    costs some HP, while being stuck costs the whole episode.
+    """
+    if not is_in_battle(pyboy):
+        return
+
+    if _settled_battle_type(pyboy) == 2:
+        # Nothing to gain from attempting to run; Gen 1 does not permit it.
+        if handle_battle is not None:
+            handle_battle(pyboy)
+        return
+
+    attempt_run_from_wild_battle(pyboy)
+
+    if is_in_battle(pyboy) and handle_battle is not None:
+        handle_battle(pyboy)
+
+
 def _try_engage_trainer(pyboy, max_presses=12):
     """
     Press A repeatedly to see whether a blocked tile is a trainer, rather
@@ -96,7 +156,7 @@ def _try_engage_trainer(pyboy, max_presses=12):
         press_button(pyboy, "a", hold_frames=12, release_frames=26)
         run_frames(pyboy, 20)
         if is_in_battle(pyboy):
-            return get_battle_type(pyboy) == 2
+            return _settled_battle_type(pyboy) == 2
 
     # Only reached when no battle started, so this never interferes with a
     # battle in progress -- the in-battle cases return above.
@@ -161,7 +221,7 @@ def _step(pyboy, direction, handle_battle=None, should_engage_trainer=None):
     run_frames(pyboy, 6)
 
     if is_in_battle(pyboy):
-        attempt_run_from_wild_battle(pyboy)
+        _resolve_any_battle(pyboy, handle_battle)
     elif not moved and handle_battle is not None:
         if (
             should_engage_trainer is None
@@ -170,6 +230,12 @@ def _step(pyboy, direction, handle_battle=None, should_engage_trainer=None):
             handle_battle(pyboy)
             moved = walk_tile(pyboy, direction, verbose=False)
             run_frames(pyboy, 6)
+        else:
+            # A probe can start a battle and still report no trainer -- a wild
+            # encounter, or a type read that settled unexpectedly. Resolving
+            # here is what makes "never return mid-battle" hold on every path
+            # rather than only the expected one.
+            _resolve_any_battle(pyboy, handle_battle)
 
     if not moved and not is_in_battle(pyboy):
         for _ in range(WALL_RETRIES):
