@@ -57,3 +57,11 @@ screenshots/**
 !screenshots/**/
 !screenshots/**/*_meta.json
 !screenshots/**/*.png
+# The mashup GIFs are the exception to "GIFs are disposable": they are the
+# project's showcase artifacts (a trained agent's full run, stitched), cost
+# real rollout compute to regenerate, and total under 1MB -- unlike the
+# ~18MB of per-round training demos, which any later round supersedes and
+# which stay ignored. Their rollout JSONs ride along: they are the recipe
+# the GIF was rendered from.
+!screenshots/mashups/**/*.gif
+!screenshots/mashups/**/*.json
