@@ -289,31 +289,31 @@ total = os.cpu_count() or 1
 tiers = core_tiers()
 print(f"  os.cpu_count() reports {total}")
 
-if tiers and len(tiers) > 1:
+if tiers:
     for name, count in tiers:
         print(f"    {count:2d} x {name}")
-    # Every tier except the slowest. On the common two-tier layout that
-    # is just the performance cores; on a three-tier part it keeps the
-    # middle tier too, which is the whole reason this isn't hardcoded to
-    # perflevel0. The slowest tier is excluded because it is the one
-    # far enough behind to turn a worker into a straggler the rest of
-    # the round waits on -- and because macOS prefers to schedule
-    # background work there anyway.
-    fast = sum(count for _, count in tiers[:-1])
-    slowest_name = tiers[-1][0]
-    recommended = max(1, fast)
-    print(f"  -> a round joins every worker before merging, so it runs at the")
-    print(f"     speed of its slowest worker. Excluding the {slowest_name} tier:")
-    print(f"     Recommended:  POKEMON_RED_WORKERS={recommended}")
-    if len(tiers) > 2:
-        print(f"     Note: with {len(tiers)} tiers the kept cores still differ in speed,")
-        print(f"     so workers on the slower kept tier finish later and the round")
-        print(f"     waits on them. Equal-episodes-per-worker is what makes that")
-        print(f"     cost real; see train_navigation_parallel.run_worker.")
-elif tiers:
-    recommended = max(1, tiers[0][1])
-    print(f"    {tiers[0][1]} x {tiers[0][0]} (single tier)")
-    print(f"  -> Recommended:  POKEMON_RED_WORKERS={recommended}")
+
+    # All of them. Workers claim episodes from a budget shared across the
+    # round rather than each being handed an equal share (see
+    # train_navigation_parallel.run_worker), so a slower core simply
+    # completes fewer episodes instead of becoming a straggler the round
+    # waits on. That removes the reason to exclude a tier at all: an
+    # excluded core contributes nothing, whereas an included slow one
+    # contributes whatever it manages.
+    #
+    # Excluding tiers was in fact the wrong call. A rule of "drop the
+    # slowest tier" costs almost nothing where that tier is a handful of
+    # efficiency cores, but on a 6-super/12-performance split it would
+    # discard two thirds of the machine -- both of those tiers are fast,
+    # and the queue makes the difference between them a non-issue.
+    recommended = max(1, sum(count for _, count in tiers))
+    print(f"  -> Recommended:  POKEMON_RED_WORKERS={recommended}  (all physical cores)")
+    if len(tiers) > 1:
+        print(f"     Uneven tiers are handled by the work queue rather than by")
+        print(f"     excluding cores: each worker claims episodes until the round's")
+        print(f"     budget runs out, so faster cores do proportionally more and")
+        print(f"     every worker finishes together. The per-worker spread printed")
+        print(f"     each round shows this happening.")
 else:
     recommended = total
     print(f"  -> Recommended:  POKEMON_RED_WORKERS={recommended}")
@@ -323,15 +323,11 @@ print(f"  each worker measured ~700MB resident here, so {recommended} workers "
 
 try:
     import train_navigation_parallel  # already on sys.path via SRC
-    target = train_navigation_parallel.TARGET_EPISODES_PER_ROUND
-    per_worker = max(
-        train_navigation_parallel.MIN_EPISODES_PER_WORKER, round(target / recommended)
-    )
-    print(f"  round size scales itself: {recommended} workers x {per_worker} episodes "
-          f"= {recommended * per_worker} episodes/round")
-    print(f"  (extra cores shorten rounds rather than enlarging them, so the same")
-    print(f"   epsilon schedule gets more merge points -- POKEMON_RED_EPISODES_PER_ROUND")
-    print(f"   overrides the {target}-episode target)")
+    budget = train_navigation_parallel.DEFAULT_EPISODES_PER_ROUND
+    print(f"  {budget} episodes per round, shared across all workers "
+          f"(~{budget / recommended:.0f} each if cores were identical)")
+    print(f"  (the budget is the round total, so more cores shorten rounds rather")
+    print(f"   than enlarging them -- POKEMON_RED_EPISODES_PER_ROUND overrides it)")
 except Exception:
     pass
 

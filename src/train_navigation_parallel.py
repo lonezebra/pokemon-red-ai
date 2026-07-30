@@ -52,31 +52,29 @@ _SPAWN_CTX = mp.get_context("spawn")
 # forest, its own copy of the trainer-battle DQN, ~700MB resident.
 DEFAULT_NUM_WORKERS = int(os.environ.get("POKEMON_RED_WORKERS") or (os.cpu_count() or 4))
 
-# Extra cores go into *shorter rounds*, not bigger ones.
+# Episodes per *round*, shared across all workers rather than assigned to
+# each -- see run_worker for why claiming from a shared budget beats
+# handing every worker an equal share.
 #
-# A round is a barrier: every worker runs `episodes_per_round` episodes,
-# then the driver merges their tables and nobody sees anyone else's
-# learning until that happens. Holding episodes-per-worker fixed while
-# adding workers therefore leaves round length unchanged but quadruples
-# the episodes inside it -- more experience per merge, no more merges.
-# Holding the round's *total* fixed instead means 4x the workers finish
-# it in a quarter the time, so the same epsilon-per-episode schedule gets
-# 4x as many merge points and 4x the feedback.
+# Because this is the round's total, extra cores shorten rounds instead of
+# enlarging them. A round is a barrier: nobody sees anyone else's learning
+# until every worker stops and the driver merges. If more workers each ran
+# a fixed share, rounds would stay the same length and simply contain more
+# experience per merge; keeping the total fixed instead means more workers
+# drain it proportionally faster, so the same epsilon-per-episode schedule
+# yields more merge points and returns feedback sooner.
 #
-# That direction also happens to help the failure actually observed here:
-# training success climbed steadily (0.5% -> 11.5% over four rounds)
-# while the greedy demo regressed (117 -> 59 tiles). Averaging four
-# independently-diverged Q-tables produces an argmax that need not be
-# good in any of their directions, and the longer workers run between
-# merges, the further they diverge before being averaged. Shorter rounds
-# resynchronize them more often.
+# Shorter rounds also push against the divergence actually observed here:
+# training success climbed steadily (0.5% -> 11.5% over four rounds) while
+# the greedy demo regressed (117 -> 59 tiles visited). Averaging
+# independently-diverged Q-tables produces an argmax that need not be good
+# in any of their directions, and the longer workers run between merges,
+# the further they drift before being averaged.
 #
-# At 4 workers this yields 100, exactly the value used before, so the
-# container's own numbers stay comparable.
-TARGET_EPISODES_PER_ROUND = int(os.environ.get("POKEMON_RED_EPISODES_PER_ROUND") or 400)
-MIN_EPISODES_PER_WORKER = 10  # below this, merge overhead starts to dominate
-DEFAULT_EPISODES_PER_ROUND = max(
-    MIN_EPISODES_PER_WORKER, round(TARGET_EPISODES_PER_ROUND / DEFAULT_NUM_WORKERS)
+# 400 keeps the container's own numbers comparable: it ran 4 workers x 100
+# episodes, which is the same round total.
+DEFAULT_EPISODES_PER_ROUND = int(
+    os.environ.get("POKEMON_RED_EPISODES_PER_ROUND") or 400
 )
 
 # See core/parallel_survey.py for why: PyBoy is single-threaded and is
@@ -128,8 +126,33 @@ def run_demo_episode(env, agent, max_steps):
     }
 
 
-def run_worker(env_class, episodes, epsilon, shared_table_path,
+def run_worker(env_class, remaining, epsilon, shared_table_path,
                output_table_path, output_summary_path, max_steps):
+    """
+    Run episodes claimed from a budget shared with every other worker in
+    the round, until it is exhausted.
+
+    Workers used to each be handed an identical episode count, which is
+    only efficient when every worker runs at the same speed. A round is a
+    barrier -- the driver joins all of them before merging -- so with
+    equal counts the round finishes at the pace of the slowest worker and
+    faster ones sit idle at the end. On a machine whose cores are
+    deliberately not identical (Apple Silicon ships two or more
+    performance tiers, and a 6-super/12-performance split means two
+    thirds of the pool runs a different speed) that idle tail is
+    structural rather than incidental.
+
+    Claiming from a shared counter instead makes the split self-balancing:
+    a faster core simply completes more episodes, every worker stops when
+    the budget is gone, and the round's tail shrinks to at most one
+    in-flight episode regardless of how uneven the cores are. It also
+    means the round's total is what's actually configured, rather than
+    per-worker-count times workers.
+
+    Each worker still reports how many episodes it ran, since that's no
+    longer inferable and the driver needs the real total for its epsilon
+    schedule and its success accounting.
+    """
     env = env_class(max_steps=max_steps)
     agent = QLearningAgent(num_actions=num_actions())
 
@@ -138,8 +161,17 @@ def run_worker(env_class, episodes, epsilon, shared_table_path,
     agent.epsilon = epsilon
 
     successes = 0
+    episodes_run = 0
 
-    for _ in range(episodes):
+    while True:
+        # Claim one episode. The lock is held only for the decrement, not
+        # for the episode itself, and episodes take seconds at minimum, so
+        # contention is irrelevant even with many workers.
+        with remaining.get_lock():
+            if remaining.value <= 0:
+                break
+            remaining.value -= 1
+
         obs = env.reset()
         info = {}
 
@@ -152,13 +184,16 @@ def run_worker(env_class, episodes, epsilon, shared_table_path,
                 break
 
         agent.decay_epsilon()
+        episodes_run += 1
         if info.get("reached_goal"):
             successes += 1
 
     env.close()
 
     agent.save(output_table_path)
-    write_json_atomic(output_summary_path, {"successes": successes, "episodes": episodes})
+    write_json_atomic(
+        output_summary_path, {"successes": successes, "episodes": episodes_run}
+    )
 
 
 def merge_tables(worker_table_paths, output_path):
@@ -255,12 +290,17 @@ def train(
         table_paths = [worker_dir / f"worker{i}.json" for i in range(num_workers)]
         summary_paths = [worker_dir / f"worker{i}_summary.json" for i in range(num_workers)]
 
+        # The round's episode budget, claimed one at a time by whichever
+        # worker is free. Created from the spawn context so the shared
+        # lock survives being passed to spawned children.
+        remaining = _SPAWN_CTX.Value("i", episodes_per_round)
+
         processes = [
             _SPAWN_CTX.Process(
                 target=run_worker,
                 args=(
                     env_class,
-                    episodes_per_round,
+                    remaining,
                     epsilon,
                     model_path,
                     table_paths[i],
@@ -278,18 +318,42 @@ def train(
         merge_tables(table_paths, model_path)
 
         round_successes = 0
+        round_episodes = 0
+        episodes_by_worker = []
         for path in summary_paths:
             with open(path) as f:
-                round_successes += json.load(f)["successes"]
+                summary = json.load(f)
+            round_successes += summary["successes"]
+            round_episodes += summary["episodes"]
+            episodes_by_worker.append(summary["episodes"])
 
         successes += round_successes
-        total_episodes += episodes_per_round * num_workers
-        epsilon = max(EPSILON_MIN, epsilon * (EPSILON_DECAY_PER_EPISODE ** episodes_per_round))
+        total_episodes += round_episodes
 
+        # Each worker decays its own epsilon once per episode it ran, so
+        # the round's effective decay is over the *average* worker's
+        # episode count, not the round total. Under the old equal-shares
+        # scheme those were the same number; with a shared budget they
+        # aren't, and using the total here would collapse epsilon roughly
+        # num_workers times too fast.
+        episodes_per_worker = round_episodes / num_workers if num_workers else 0
+        epsilon = max(
+            EPSILON_MIN, epsilon * (EPSILON_DECAY_PER_EPISODE ** episodes_per_worker)
+        )
+
+        # The spread across workers is the diagnostic for whether the
+        # cores are as uneven as expected -- on identical cores it should
+        # be nearly flat, and on a mixed-tier machine the faster tier
+        # should visibly claim more.
+        spread = (
+            f"  per-worker: {min(episodes_by_worker)}-{max(episodes_by_worker)}"
+            if episodes_by_worker and min(episodes_by_worker) != max(episodes_by_worker)
+            else ""
+        )
         print(
             f"Round {round_num:3d}  total_episodes={total_episodes}  epsilon={epsilon:.3f}  "
-            f"successes this round: {round_successes}/{num_workers * episodes_per_round}  "
-            f"cumulative: {successes}/{total_episodes}"
+            f"successes this round: {round_successes}/{round_episodes}  "
+            f"cumulative: {successes}/{total_episodes}{spread}"
         )
 
         demo_env = env_class(max_steps=max_steps)
