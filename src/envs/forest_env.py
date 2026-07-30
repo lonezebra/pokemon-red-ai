@@ -15,6 +15,7 @@ from rewards.forest_rewards import (
     position_key,
     FOREST_MAP_ID,
     CONNECTOR_MAP_ID,
+    _DISTANCES,
 )
 
 FOREST_ENTRY_STATE_PATH = PROJECT_ROOT / "saves" / "leveled.state"
@@ -144,8 +145,10 @@ class PokemonRedForestEnv:
         # is undefeated again, so last episode's probes say nothing about
         # this one.
         self.probed_trainer_moves = set()
+        self.min_distance = None
 
         position = get_player_position(self.pyboy)
+        self._note_depth(position)
         self.visited_positions.add(position_key(position))
 
         return self._get_observation()
@@ -168,6 +171,7 @@ class PokemonRedForestEnv:
         reward = calculate_forest_reward(before=before, after=after)
 
         self.visited_positions.add(position_key(after))
+        self._note_depth(after)
         self.step_count += 1
 
         reached_goal = after["map_id"] == CONNECTOR_MAP_ID
@@ -183,9 +187,29 @@ class PokemonRedForestEnv:
             "after": after,
             "reached_goal": reached_goal,
             "step_count": self.step_count,
+            "min_distance": self.min_distance,
         }
 
         return self._get_observation(), reward, done, info
+
+    def _note_depth(self, position):
+        """
+        Track the closest-to-goal point this episode has reached, in
+        shortest-path hops. tiles_visited turned out to be misleading as a
+        progress readout: a policy following the corridor directly visits
+        *fewer* tiles than one wandering shallowly, so a falling count can
+        be improvement. Depth is monotone in what actually matters.
+        """
+        if position["map_id"] == CONNECTOR_MAP_ID:
+            distance = 0
+        elif position["map_id"] != FOREST_MAP_ID:
+            return
+        else:
+            distance = _DISTANCES.get((position["x"], position["y"]))
+            if distance is None:
+                return
+        if self.min_distance is None or distance < self.min_distance:
+            self.min_distance = distance
 
     def _get_observation(self):
         return get_player_position(self.pyboy)

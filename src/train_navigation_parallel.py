@@ -163,6 +163,7 @@ def run_demo_episode(env, agent, max_steps):
         "tiles_visited": len(env.visited_positions),
         "steps": info.get("step_count", 0),
         "nudges": nudges,
+        "min_distance": info.get("min_distance"),
     }
 
 
@@ -525,10 +526,14 @@ def train(
             demo_env.close()
 
             save_gif(demo["frames"], f"{gif_prefix}_progress_round{round_num:03d}.gif")
+            depth = (
+                f" depth={demo['min_distance']}"
+                if demo.get("min_distance") is not None else ""
+            )
             print(
                 f"  [demo] reached_goal={demo['reached_goal']} "
                 f"tiles_visited={demo['tiles_visited']} steps={demo['steps']} "
-                f"nudges={demo['nudges']}"
+                f"nudges={demo['nudges']}{depth}"
             )
 
             demo_key = (demo["reached_goal"], demo["tiles_visited"], -demo["steps"])
