@@ -75,18 +75,47 @@ class PokemonRedWildBattleEnv(gym.Env):
     the overworld (party count 1 -> 2, one ball consumed) on a real
     catch.
 
+    Catching does not award XP in Gen 1 (only a knockout does), so a
+    flat catch bonus bigger than winning -- the first version of this
+    env had exactly that -- would train the agent to try catching every
+    single encounter forever, full party or not, duplicate or not,
+    since nothing in the reward said otherwise. species_already_caught
+    tracks which species this *training run* has already caught (a
+    Python set on the env, not the game's own Pokedex flags: those are
+    indexed by National Dex number rather than this codebase's internal
+    species index throughout, and converting between them needs a full
+    ~190-entry lookup table that would be pure transcription risk to
+    hardcode from memory rather than something worth verifying here;
+    the real Pokedex also has no meaningful "already owned" answer to
+    give a fixed save-state reset every episode anyway, so an env-level
+    set is both simpler and the more correct answer to what training
+    actually needs). A new species catches at CATCH_REWARD; a species
+    already in the set catches at the much smaller CATCH_DUPLICATE_
+    REWARD, teaching the agent that catching is preferred only when it
+    grows the collection, not reflexively.
+
+    Persists across reset() by design, not cleared per episode --
+    "already caught" is supposed to mean across the run, the same way
+    a real Pokedex does, not reset to empty every 30 steps.
+
+    Left for later, deliberately not addressed here: judging whether a
+    specific individual's stats are "good enough" to bother catching.
+    Gen 1 IVs aren't exposed as a clean fraction the way HP is, and
+    "good enough compared to what" needs a real comparison basis (the
+    rest of the party? every past catch of the same species?) that's
+    its own design question, not a quick addition alongside this one.
+
     Observation: [your_hp_fraction, enemy_hp_fraction,
                   move1_valid, move2_valid, move3_valid, move4_valid,
-                  poke_balls_remaining_fraction]
+                  poke_balls_remaining_fraction, species_already_caught]
     Deliberately not including species/level directly for this first
     version -- same reasoning as leave-house/rival-battle starting
     minimal: HP fractions and move availability might already be enough
     signal to learn sensible fight-or-flee behavior, and this is cheap
-    to revisit if evaluation says otherwise. Ball count *is* included,
-    unlike moves/RUN which need no such signal: unlike a move slot's
-    validity (readable from the enemy/battle state already in the
-    observation), whether a catch attempt is even possible depends on a
-    resource the observation would otherwise give no hint of at all.
+    to revisit if evaluation says otherwise. Ball count and already-
+    caught *are* included, unlike moves/RUN which need no such signal:
+    neither is inferable from the enemy/battle state already in the
+    observation the way a move slot's own validity is.
 
     randomize_stats=True (the default) rerolls the player's own battle
     stats each reset, same as the rival battle env and for the same
@@ -103,6 +132,9 @@ class PokemonRedWildBattleEnv(gym.Env):
         self.max_steps = max_steps
         self.randomize_stats = randomize_stats
         self.step_count = 0
+        # Across the whole training run, not per-episode -- see the
+        # class docstring for why this isn't cleared in reset().
+        self.species_already_caught = set()
 
         self.encounter_paths = sorted(WILD_ENCOUNTER_STATE_DIR.glob("species_*.state"))
         if not self.encounter_paths:
@@ -112,7 +144,7 @@ class PokemonRedWildBattleEnv(gym.Env):
             )
 
         self.action_space = spaces.Discrete(NUM_ACTIONS)
-        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(7,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(8,), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -156,9 +188,16 @@ class PokemonRedWildBattleEnv(gym.Env):
 
         after = get_detailed_battle_state(self.pyboy)
         caught = get_party_count(self.pyboy) > party_count_before
+        # Checked before updating the set: a catch's reward depends on
+        # whether the species was *already* known going into this catch,
+        # not on the post-catch state where it always would be.
+        caught_new_species = caught and before["enemy_mon_species"] not in self.species_already_caught
         reward = calculate_wild_battle_reward(
-            before, after, invalid_action=chose_invalid_action, caught=caught
+            before, after, invalid_action=chose_invalid_action,
+            caught=caught, caught_new_species=caught_new_species,
         )
+        if caught:
+            self.species_already_caught.add(before["enemy_mon_species"])
 
         self.step_count += 1
 
@@ -170,6 +209,7 @@ class PokemonRedWildBattleEnv(gym.Env):
             "after": after,
             "chose_invalid_action": chose_invalid_action,
             "caught": caught,
+            "caught_new_species": caught_new_species,
             "won": terminated and after["enemy_mon_hp"] == 0 and not caught,
             "lost": terminated and after["battle_mon_hp"] == 0,
             "fled": terminated and after["enemy_mon_hp"] > 0
@@ -245,9 +285,11 @@ class PokemonRedWildBattleEnv(gym.Env):
         balls_fraction = (
             get_bag_item_quantity(self.pyboy, POKE_BALL_ITEM_ID) / POKEBALLS_PER_EPISODE
         )
+        already_caught = 1.0 if state["enemy_mon_species"] in self.species_already_caught else 0.0
 
         return np.array(
-            [your_fraction, enemy_fraction] + move_valid + [balls_fraction], dtype=np.float32
+            [your_fraction, enemy_fraction] + move_valid + [balls_fraction, already_caught],
+            dtype=np.float32,
         )
 
     def close(self):
