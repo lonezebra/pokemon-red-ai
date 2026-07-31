@@ -11,15 +11,22 @@ import sys  # noqa: E402
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "tools"))
 
+from actions import num_actions  # noqa: E402
+from agents.q_learning_agent import QLearningAgent  # noqa: E402
 from core.config import PROJECT_ROOT  # noqa: E402
 from envs.forest_curriculum_env import (  # noqa: E402
     STAGE_VAR,
     CurriculumForestEnv,
     stage_start_states,
 )
+from envs.forest_env import PokemonRedForestEnv  # noqa: E402
 from policy_accuracy import is_correct, load_edges  # noqa: E402
 from rewards.forest_rewards import _DISTANCES  # noqa: E402
-from train_navigation_parallel import load_progress, train  # noqa: E402
+from train_navigation_parallel import (  # noqa: E402
+    load_progress,
+    run_demo_episode,
+    train,
+)
 
 MODEL_PATH = PROJECT_ROOT / "models" / "forest_curriculum_q_table.json"
 STATE_PATH = PROJECT_ROOT / "models" / "forest_curriculum_parallel_state.json"
@@ -48,11 +55,51 @@ def is_mastered(correct, seen):
     edges from a frozen cutscene), so perfection is not merely hard, it
     can be structurally unreachable. One wrong tile is always allowed;
     larger stages keep the 3% budget the percentage always gave them.
+
+    NOTE: since the behavioral gate below was added, this scores
+    telemetry only. It stopped being the gate the day it blocked stage
+    d<=25 on tiles where the agent was measurably right and the answer
+    key wrong: the shortest-path route those tiles were graded against
+    runs straight through an unbeaten trainer, and the agent's preferred
+    detour -- persistently valued higher across thousands of episodes --
+    was it correctly pricing in a forced battle the trainer-blind
+    distance map cannot see.
     """
     if seen == 0:
         return False
     allowed = max(1, int(seen * (1.0 - MASTERY_ACCURACY)))
     return (seen - correct) <= allowed
+
+
+def stage_demo(stage, max_steps):
+    """
+    The behavioral mastery gate: a purely greedy walk from the stage's
+    deepest start state. Mastered means it reaches the exit with zero
+    nudges -- the policy is genuinely solving this stretch of forest,
+    not being carried by the demo's loop-breaker.
+
+    This is the criterion the per-tile accuracy score was standing in
+    for, and the reason it can't stand in: accuracy grades each tile
+    against "step toward the goal by shortest graph path", but the graph
+    is trainer-blind. Where the shortest path crosses an unbeaten
+    trainer, the truly optimal policy detours, and accuracy counts every
+    tile of that correct detour as an error. Reaching the exit greedily
+    is the thing itself rather than a proxy for it.
+    """
+    states = stage_start_states(stage)
+    env = PokemonRedForestEnv(max_steps=max_steps, start_states=[states[-1]])
+    agent = QLearningAgent(num_actions=num_actions())
+    agent.load(MODEL_PATH)
+    try:
+        demo = run_demo_episode(env, agent, max_steps)
+    finally:
+        env.close()
+    return {
+        "reached_goal": demo["reached_goal"],
+        "nudges": demo["nudges"],
+        "steps": demo["steps"],
+        "start": states[-1].name,
+    }
 
 # Give up on a stage rather than grinding it forever. Hitting this is
 # information, not just a timeout: it means visiting those tiles
@@ -168,15 +215,19 @@ def main():
         os.environ[STAGE_VAR] = str(stage)
 
         accuracy, correct, seen = stage_accuracy(stage, edges)
+        demo = stage_demo(stage, max_steps)
         print(
             f"\n=== stage d<={stage}: {len(states)} start states, "
-            f"max_steps={max_steps}, accuracy {accuracy:.1%} ({correct}/{seen}) ==="
+            f"max_steps={max_steps}, accuracy {accuracy:.1%} ({correct}/{seen}), "
+            f"greedy from {demo['start']}: reached={demo['reached_goal']} "
+            f"nudges={demo['nudges']} ==="
         )
 
-        if is_mastered(correct, seen):
-            print(f"already at or above {MASTERY_ACCURACY:.0%}; advancing")
+        if demo["reached_goal"] and demo["nudges"] == 0:
+            print("greedy already solves this stage nudge-free; advancing")
             log_stage({"stage": stage, "rounds": 0, "accuracy": accuracy,
-                       "correct": correct, "seen": seen, "mastered": True})
+                       "correct": correct, "seen": seen, "mastered": True,
+                       "demo": demo})
             stage += STAGE_STEP
             continue
 
@@ -214,22 +265,25 @@ def main():
 
             accuracy, correct, seen = stage_accuracy(stage, edges)
             overall_acc, overall_correct, overall_seen = whole_map_accuracy(edges)
+            demo = stage_demo(stage, max_steps)
             print(f"  stage d<={stage} round {rounds_done}: "
                   f"accuracy {accuracy:.1%} ({correct}/{seen}), "
-                  f"whole-map {overall_acc:.1%} ({overall_correct}/{overall_seen})")
+                  f"whole-map {overall_acc:.1%} ({overall_correct}/{overall_seen}), "
+                  f"greedy reached={demo['reached_goal']} nudges={demo['nudges']}")
 
-            if is_mastered(correct, seen):
+            if demo["reached_goal"] and demo["nudges"] == 0:
                 break
 
-        mastered = is_mastered(correct, seen)
+        mastered = demo["reached_goal"] and demo["nudges"] == 0
         log_stage({"stage": stage, "rounds": rounds_done, "accuracy": accuracy,
                    "correct": correct, "seen": seen, "mastered": mastered,
-                   "whole_map_accuracy": overall_acc})
+                   "whole_map_accuracy": overall_acc, "demo": demo})
 
         if not mastered:
             print(
-                f"\nstage d<={stage} did not reach {MASTERY_ACCURACY:.0%} in "
-                f"{MAX_ROUNDS_PER_STAGE} rounds (stopped at {accuracy:.1%}).\n"
+                f"\nstage d<={stage}: greedy still can't reach the exit "
+                f"nudge-free from {demo['start']} after "
+                f"{MAX_ROUNDS_PER_STAGE} rounds (accuracy {accuracy:.1%}).\n"
                 f"Stopping here rather than widening the start line over an "
                 f"unlearned segment -- every later stage has to walk through it."
             )
