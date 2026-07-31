@@ -80,13 +80,25 @@ def covered_tiles(stage):
 
 
 def _accuracy_over(table, edges, tiles):
+    """
+    Score every tile passed in, counting one the table has never seen as
+    wrong rather than skipping it.
+
+    is_correct returns None both for "no Q-row yet" and for "not a
+    scorable tile", but every caller here pre-filters to tiles with a
+    real distance to the goal, so None can only mean the agent has never
+    been there -- which is not a correct policy, it is no policy.
+
+    Skipping them silently broke the gate the first time it mattered:
+    clearing two poisoned rows so they would relearn from neutral made
+    them invisible instead, and stage d<=15 declared mastery at round 0
+    on the 28 tiles it could still see -- advancing past exactly the two
+    tiles the clearing was meant to fix.
+    """
     correct = seen = 0
     for tile in tiles:
-        verdict = is_correct(table, edges, tile)
-        if verdict is None:
-            continue
         seen += 1
-        correct += bool(verdict)
+        correct += bool(is_correct(table, edges, tile))
     return (correct / seen if seen else 0.0), correct, seen
 
 
