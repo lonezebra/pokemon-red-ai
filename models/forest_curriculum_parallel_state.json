@@ -1,1 +1,1 @@
-{"round": 5, "epsilon": 0.23413912204296528, "total_episodes": 2000, "successes": 1501, "best_demo_key": [true, 21, -20]}
+{"round": 6, "epsilon": 0.22395083229924395, "total_episodes": 2400, "successes": 1760, "best_demo_key": [true, 21, -20]}
