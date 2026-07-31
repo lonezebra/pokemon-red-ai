@@ -18,14 +18,31 @@ LOSS_REWARD = -10.0
 # should still be what the agent prefers whenever it actually can.
 FLED_REWARD = 1.0
 
+# Deliberately the single largest terminal reward available: catching a
+# wild Pokemon is a permanent addition to the party, worth strictly more
+# than the XP from just fainting it -- teaching the agent that reaching
+# for a Poke Ball is the *preferred* outcome when one is available, not
+# merely tolerated. Set above WIN_REWARD rather than beside it so a
+# state where both are reachable doesn't leave the agent indifferent
+# between them.
+CATCH_REWARD = 15.0
 
-def calculate_wild_battle_reward(before, after, invalid_action=False):
+
+def calculate_wild_battle_reward(before, after, invalid_action=False, caught=False):
     """
     before/after are battle-state dicts from memory.get_wild_battle_state().
 
     invalid_action means the chosen move slot wasn't usable (unknown move
     or 0 PP) -- no button was pressed, so `before` and `after` are the
     same state. Choosing to run is never invalid regardless of PP/moves.
+
+    caught means this exact step's action grew the party (checked by the
+    caller via get_party_count before/after, the only signal that can't
+    be confused with the battle ending some other way) -- a caught wild
+    Pokemon leaves enemy_mon_hp > 0 and battle_mon_hp > 0 exactly like a
+    successful flee does, so without this flag a catch would silently
+    score as FLED_REWARD instead of the much larger, deliberately
+    distinct bonus it's meant to teach.
     """
 
     # Added, not returned on its own. This originally returned the
@@ -51,7 +68,9 @@ def calculate_wild_battle_reward(before, after, invalid_action=False):
     reward -= damage_taken_fraction
 
     if not after["in_battle"]:
-        if after["enemy_mon_hp"] == 0:
+        if caught:
+            reward += CATCH_REWARD
+        elif after["enemy_mon_hp"] == 0:
             reward += WIN_REWARD
         elif after["battle_mon_hp"] == 0:
             reward += LOSS_REWARD

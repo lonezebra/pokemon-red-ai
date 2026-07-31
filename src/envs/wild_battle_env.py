@@ -7,13 +7,30 @@ from gymnasium import spaces
 from core.emulator import create_emulator, run_frames
 from core.state import load_state, wild_encounter_state_path, WILD_ENCOUNTER_STATE_DIR
 from core.controls import press_button, advance_battle_dialogue
-from core.memory import get_detailed_battle_state, get_move_cursor_slot, randomize_battle_mon_stats
+from core.memory import (
+    POKE_BALL_ITEM_ID,
+    get_bag_item_quantity,
+    get_detailed_battle_state,
+    get_move_cursor_slot,
+    get_party_count,
+    randomize_battle_mon_stats,
+    set_bag_item_quantity,
+)
 from rewards.wild_battle_rewards import calculate_wild_battle_reward
 
 
 NUM_MOVE_SLOTS = 4
 RUN_ACTION = 4
-NUM_ACTIONS = 5
+CATCH_ACTION = 5
+NUM_ACTIONS = 6
+
+# Plenty for a 30-step episode (no fight here has ever needed more than a
+# couple of throws) without being large enough to matter for anything
+# else. Written directly into the bag at reset -- every wild-encounter
+# state predates this project needing an item, so all of them load with
+# an empty bag, the same reason randomize_battle_mon_stats already
+# rewrites battle stats directly rather than trusting the save file.
+POKEBALLS_PER_EPISODE = 5
 
 
 class PokemonRedWildBattleEnv(gym.Env):
@@ -35,13 +52,41 @@ class PokemonRedWildBattleEnv(gym.Env):
     in which case the wild Pokemon still gets its turn -- exactly like a
     failed attack, just without dealing any damage.
 
+    Action 5 throws a Poke Ball. Every save state under
+    saves/wild_encounters/ predates this project ever needing an item,
+    so all of them load with an empty bag; reset() writes
+    POKEBALLS_PER_EPISODE directly into it (set_bag_item_quantity),
+    matching the existing convention of writing player-side facts
+    straight into memory at reset rather than depending on the save
+    file (randomize_battle_mon_stats already does this for battle
+    stats). Throwing with zero balls left is treated as an invalid
+    action, the same as naming an unusable move slot, and falls back to
+    the first valid move instead -- not to running, so an empty-handed
+    catch attempt still costs a real turn of fighting rather than a
+    free pass. A catch is detected by the party's own Pokemon count
+    increasing (get_party_count before vs after), the only signal that
+    can't be confused with the battle simply ending some other way.
+
+    The button sequence (down from FIGHT opens ITEM, per _attempt_run's
+    documented menu layout; POKE BALL sits alone at the top of a bag
+    reset() only ever puts one item in) was verified against real
+    screenshots before being trusted, including both outcomes: "Aww!
+    It appeared to be caught!" on a failed throw and a clean return to
+    the overworld (party count 1 -> 2, one ball consumed) on a real
+    catch.
+
     Observation: [your_hp_fraction, enemy_hp_fraction,
-                  move1_valid, move2_valid, move3_valid, move4_valid]
+                  move1_valid, move2_valid, move3_valid, move4_valid,
+                  poke_balls_remaining_fraction]
     Deliberately not including species/level directly for this first
     version -- same reasoning as leave-house/rival-battle starting
     minimal: HP fractions and move availability might already be enough
     signal to learn sensible fight-or-flee behavior, and this is cheap
-    to revisit if evaluation says otherwise.
+    to revisit if evaluation says otherwise. Ball count *is* included,
+    unlike moves/RUN which need no such signal: unlike a move slot's
+    validity (readable from the enemy/battle state already in the
+    observation), whether a catch attempt is even possible depends on a
+    resource the observation would otherwise give no hint of at all.
 
     randomize_stats=True (the default) rerolls the player's own battle
     stats each reset, same as the rival battle env and for the same
@@ -67,7 +112,7 @@ class PokemonRedWildBattleEnv(gym.Env):
             )
 
         self.action_space = spaces.Discrete(NUM_ACTIONS)
-        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(6,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(7,), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -79,6 +124,8 @@ class PokemonRedWildBattleEnv(gym.Env):
         if self.randomize_stats:
             randomize_battle_mon_stats(self.pyboy, random)
 
+        set_bag_item_quantity(self.pyboy, POKE_BALL_ITEM_ID, POKEBALLS_PER_EPISODE)
+
         self.step_count = 0
 
         state = get_detailed_battle_state(self.pyboy)
@@ -86,10 +133,21 @@ class PokemonRedWildBattleEnv(gym.Env):
 
     def step(self, action):
         before = get_detailed_battle_state(self.pyboy)
+        party_count_before = get_party_count(self.pyboy)
 
         if action == RUN_ACTION:
             self._attempt_run()
             chose_invalid_action = False
+        elif action == CATCH_ACTION:
+            chose_invalid_action = get_bag_item_quantity(self.pyboy, POKE_BALL_ITEM_ID) <= 0
+            if chose_invalid_action:
+                # Falls back to fighting, not running -- naming an
+                # unusable move slot gets the same treatment (the first
+                # valid move, never a free pass), so an empty-handed
+                # catch attempt costs a real turn the same way.
+                self._select_move(self._valid_move_slots(before)[0])
+            else:
+                self._attempt_catch()
         else:
             valid_slots = self._valid_move_slots(before)
             chose_invalid_action = action not in valid_slots
@@ -97,7 +155,10 @@ class PokemonRedWildBattleEnv(gym.Env):
             self._select_move(actual_action)
 
         after = get_detailed_battle_state(self.pyboy)
-        reward = calculate_wild_battle_reward(before, after, invalid_action=chose_invalid_action)
+        caught = get_party_count(self.pyboy) > party_count_before
+        reward = calculate_wild_battle_reward(
+            before, after, invalid_action=chose_invalid_action, caught=caught
+        )
 
         self.step_count += 1
 
@@ -108,9 +169,11 @@ class PokemonRedWildBattleEnv(gym.Env):
             "before": before,
             "after": after,
             "chose_invalid_action": chose_invalid_action,
-            "won": terminated and after["enemy_mon_hp"] == 0,
+            "caught": caught,
+            "won": terminated and after["enemy_mon_hp"] == 0 and not caught,
             "lost": terminated and after["battle_mon_hp"] == 0,
-            "fled": terminated and after["enemy_mon_hp"] > 0 and after["battle_mon_hp"] > 0,
+            "fled": terminated and after["enemy_mon_hp"] > 0
+                    and after["battle_mon_hp"] > 0 and not caught,
         }
 
         return self._observation(after), reward, terminated, truncated, info
@@ -154,6 +217,22 @@ class PokemonRedWildBattleEnv(gym.Env):
         press_button(self.pyboy, "a", hold_frames=10, release_frames=15)
         advance_battle_dialogue(self.pyboy)
 
+    def _attempt_catch(self):
+        # From FIGHT: down opens ITEM (see _attempt_run for the menu
+        # layout this was verified against). reset() only ever puts one
+        # item in the bag, so POKE BALL is always the top, default-
+        # cursor entry -- confirmed live, including both outcomes: "Aww!
+        # It appeared to be caught!" on a failed throw, and a clean
+        # return to the overworld (party count +1, one ball consumed)
+        # on a real catch. advance_battle_dialogue's own stopping
+        # condition (battle menu open again, or battle over) already
+        # covers whichever one happens.
+        press_button(self.pyboy, "down", hold_frames=10, release_frames=15)
+        press_button(self.pyboy, "a", hold_frames=10, release_frames=20)
+        press_button(self.pyboy, "a", hold_frames=10, release_frames=20)
+        run_frames(self.pyboy, 30)
+        advance_battle_dialogue(self.pyboy)
+
     def _observation(self, state):
         your_fraction = state["battle_mon_hp"] / max(state["battle_mon_max_hp"], 1)
         enemy_fraction = state["enemy_mon_hp"] / max(state["enemy_mon_max_hp"], 1)
@@ -163,7 +242,13 @@ class PokemonRedWildBattleEnv(gym.Env):
             for i in range(NUM_MOVE_SLOTS)
         ]
 
-        return np.array([your_fraction, enemy_fraction] + move_valid, dtype=np.float32)
+        balls_fraction = (
+            get_bag_item_quantity(self.pyboy, POKE_BALL_ITEM_ID) / POKEBALLS_PER_EPISODE
+        )
+
+        return np.array(
+            [your_fraction, enemy_fraction] + move_valid + [balls_fraction], dtype=np.float32
+        )
 
     def close(self):
         self.pyboy.stop()
