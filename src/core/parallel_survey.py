@@ -113,6 +113,8 @@ def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
                          # geometric guess would get wrong.
     frames = [] if capture_frames else None
     errors = []  # (key, direction, repr(exception)), for a battle handler that raises
+    retry_keys = []  # keys whose heal step raised -- see below for why these need
+                      # to go back in the driver's queue rather than just being logged
 
     for key, snapshot in assigned:
         _restore(pyboy, snapshot)
@@ -126,10 +128,22 @@ def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
             # best-effort (returns False rather than raising), but a
             # handle_battle passed through it can still raise -- a
             # not-yet-discovered trainer encountered mid-heal-trip, say.
-            # Recorded and skipped rather than crashing the worker: one
-            # tile misexplored this round is nothing next to losing every
-            # other tile this worker was assigned along with it.
+            #
+            # `continue` here skips this key's whole direction loop for
+            # the round -- and a key is only ever popped from the
+            # driver's queue once, so on its own that silently abandons
+            # this tile's exploration forever, not just for this round.
+            # That's exactly what happened live: Route 3's survey came
+            # back "complete" with its frontier dead-ending right at the
+            # three tiles whose heal step is logged raising here, one
+            # of which sits on a real warp (a same-map-ID teleport this
+            # project hadn't seen before) that a next round might well
+            # have walked straight through. retry_keys is how the driver
+            # gets a chance to try these tiles again instead of treating
+            # one bad-luck battle as if the tile had genuinely explored
+            # to a dead end.
             errors.append((key, "heal", repr(exc)))
+            retry_keys.append(key)
             continue
 
         for direction in DIRECTIONS:
@@ -175,7 +189,8 @@ def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
     with open(output_path, "wb") as f:
         pickle.dump(
             {"new_tiles": new_tiles, "exits": exits, "refreshed": refreshed,
-             "edges": edges, "frames": frames, "errors": errors},
+             "edges": edges, "frames": frames, "errors": errors,
+             "retry_keys": retry_keys},
             f,
         )
 
@@ -237,6 +252,13 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
     exits = {}
     edges = {}
     queue = deque([start_key])
+    # A key whose heal step raised gets requeued (see _run_worker) rather
+    # than silently abandoned -- but bounded, so a tile that is genuinely,
+    # persistently unlucky (or sits next to a trainer the battle policy
+    # keeps losing to) can't loop forever and block the survey from ever
+    # reporting complete.
+    retry_counts = {}
+    MAX_RETRIES = 3
 
     round_num = 0
     while queue and len(tiles) < max_tiles:
@@ -292,6 +314,14 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
             if result.get("errors"):
                 for key, direction, error in result["errors"]:
                     print(f"  worker {worker_index}: {key} {direction} -> {error}")
+
+            for key in result.get("retry_keys", []):
+                retry_counts[key] = retry_counts.get(key, 0) + 1
+                if retry_counts[key] <= MAX_RETRIES:
+                    queue.append(key)
+                else:
+                    print(f"  {key}: heal step failed {retry_counts[key]} times, "
+                          f"giving up on exploring past it")
 
             for key, snap in result["refreshed"].items():
                 states[key] = snap
