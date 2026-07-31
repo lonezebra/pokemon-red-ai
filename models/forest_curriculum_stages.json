@@ -1,0 +1,19 @@
+[
+  {
+    "stage": 10,
+    "rounds": 1,
+    "accuracy": 1.0,
+    "correct": 19,
+    "seen": 19,
+    "mastered": true,
+    "whole_map_accuracy": 0.9222065063649222
+  },
+  {
+    "stage": 15,
+    "rounds": 0,
+    "accuracy": 0.9642857142857143,
+    "correct": 27,
+    "seen": 28,
+    "mastered": true
+  }
+]
