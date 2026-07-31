@@ -7,11 +7,15 @@ from core.config import PROJECT_ROOT
 MODEL_PATH = PROJECT_ROOT / "models" / "wild_battle_dqn.zip"
 
 
-def main(total_timesteps=20000):
-    # Same DQN setup as train_battle_agent.py (rival battle) -- same
-    # observation shape (6 floats) and only one more discrete action
-    # (run), so there's no reason to expect this needs different
-    # hyperparameters until evaluation says otherwise.
+def main(total_timesteps=50000):
+    # Same DQN setup as train_battle_agent.py (rival battle), still --
+    # only the timestep budget changed. The observation grew by one
+    # float (Poke Balls remaining) and the action space by one discrete
+    # choice (catch), and catching is a strictly harder decision than
+    # the old fight-or-flee: whether to spend a limited resource on a
+    # probabilistic outcome depends on the opponent's remaining HP, not
+    # just its sign. 20000 steps was tuned for the simpler problem;
+    # bumped up rather than assumed to still be enough.
     env = Monitor(PokemonRedWildBattleEnv(max_steps=30))
 
     model = DQN(
