@@ -72,5 +72,14 @@
     "correct": 41,
     "seen": 42,
     "mastered": true
+  },
+  {
+    "stage": 25,
+    "rounds": 12,
+    "accuracy": 0.9508196721311475,
+    "correct": 58,
+    "seen": 61,
+    "mastered": false,
+    "whole_map_accuracy": 0.9213483146067416
   }
 ]
