@@ -124,5 +124,132 @@
       "steps": 250,
       "start": "d020_2_22.state"
     }
+  },
+  {
+    "stage": 10,
+    "rounds": 0,
+    "accuracy": 1.0,
+    "correct": 19,
+    "seen": 19,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 11,
+      "start": "d010_1_11.state"
+    }
+  },
+  {
+    "stage": 15,
+    "rounds": 0,
+    "accuracy": 1.0,
+    "correct": 30,
+    "seen": 30,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 18,
+      "start": "d015_1_18.state"
+    }
+  },
+  {
+    "stage": 20,
+    "rounds": 0,
+    "accuracy": 1.0,
+    "correct": 42,
+    "seen": 42,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 24,
+      "start": "d020_2_22.state"
+    }
+  },
+  {
+    "stage": 25,
+    "rounds": 0,
+    "accuracy": 0.9672131147540983,
+    "correct": 59,
+    "seen": 61,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 31,
+      "start": "d025_7_22.state"
+    }
+  },
+  {
+    "stage": 30,
+    "rounds": 0,
+    "accuracy": 0.9659090909090909,
+    "correct": 85,
+    "seen": 88,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 36,
+      "start": "d030_8_18.state"
+    }
+  },
+  {
+    "stage": 35,
+    "rounds": 0,
+    "accuracy": 0.9469026548672567,
+    "correct": 107,
+    "seen": 113,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 41,
+      "start": "d035_8_13.state"
+    }
+  },
+  {
+    "stage": 40,
+    "rounds": 0,
+    "accuracy": 0.9236641221374046,
+    "correct": 121,
+    "seen": 131,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 46,
+      "start": "d040_8_8.state"
+    }
+  },
+  {
+    "stage": 45,
+    "rounds": 1,
+    "accuracy": 0.9041095890410958,
+    "correct": 132,
+    "seen": 146,
+    "mastered": true,
+    "whole_map_accuracy": 0.9241573033707865,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 51,
+      "start": "d045_8_3.state"
+    }
+  },
+  {
+    "stage": 50,
+    "rounds": 0,
+    "accuracy": 0.8841463414634146,
+    "correct": 145,
+    "seen": 164,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 60,
+      "start": "d050_11_5.state"
+    }
   }
 ]
