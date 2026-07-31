@@ -435,5 +435,20 @@
       "steps": 132,
       "start": "d115_25_43.state"
     }
+  },
+  {
+    "stage": 120,
+    "rounds": 12,
+    "accuracy": 0.9213893967093236,
+    "correct": 504,
+    "seen": 547,
+    "mastered": false,
+    "whole_map_accuracy": 0.9382022471910112,
+    "demo": {
+      "reached_goal": false,
+      "nudges": 0,
+      "steps": 98,
+      "start": "d120_20_43.state"
+    }
   }
 ]
