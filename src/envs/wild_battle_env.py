@@ -42,6 +42,27 @@ class PokemonRedWildBattleEnv(gym.Env):
     actually vary here, which is the entire reason this is a separate
     environment rather than a mode of PokemonRedRivalBattleEnv.
 
+    That pool includes both full-HP captures and, per species, one
+    already-weakened capture (create_weakened_wild_encounter_state.py,
+    named species_<id>_weakened.state -- picked up automatically since
+    it still matches this glob, no separate wiring needed). This exists
+    because catching only pays off from a narrow "weakened but still
+    alive" window -- measured live at essentially a 100% success rate
+    for both species this project currently has states for -- but
+    average episode length under random exploration is only ~2.5 steps
+    (these opponents are weak enough that a single hit often goes
+    straight from mid-HP to zero), so *landing* in that window by
+    chance is rare regardless of how much total training runs. A
+    200,000-timestep retrain still valued a guaranteed-catch state at
+    ~3 out of a possible ~15, barely above a 50,000-step run's ~2.3 --
+    more of the same lever wasn't moving it. Starting roughly half of
+    episodes already in that window (the pool is presently 2 full-HP +
+    2 weakened, so a uniform random.choice lands there about 48% of the
+    time, confirmed live) gives the network many direct experiences of
+    "catch from here is great" instead of depending on exploration
+    luck -- the same fix already proven for the forest maze, applied
+    here to a battle instead of a corridor.
+
     Action: 0-3 pick a move slot (same invalid-slot handling as the rival
     battle env: an unusable slot costs a small penalty instead of
     pressing any button). Action 4 attempts to run -- always a legal
