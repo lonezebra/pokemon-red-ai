@@ -1,4 +1,5 @@
 import os
+import sys
 
 # Headless before any core import -- see train_forest_agent.py.
 os.environ.setdefault("POKEMON_AI_WINDOW_MODE", "null")
@@ -44,20 +45,15 @@ PEWTER_CITY_MAP_ID = 2
 PEWTER_POKECENTER_MAP_ID = 58
 ROUTE_3_MAP_ID = 14
 
-# 0.85 was the forest survey's value, carried over without re-deriving
-# it for this route's numbers -- wrong to assume it would transfer.
-# Measured directly: arriving at (11,5) triggered a heal trip at 44% HP
-# (below 0.85), and the walk back to Pewter passes through *more*
-# trainers before reaching the Center -- Route 3 is denser than the
-# forest, roughly one trainer every few tiles. The first en-route fight
-# alone cost 16 of 41 max HP (~40%), leaving 1/43; the very next
-# trainer, fought at that margin, ended the run. No battle policy wins
-# a fight starting at 1 HP -- this was never a policy weakness, four
-# retries of the exact same heal trip all failed the same way because
-# the mechanism is deterministic HP arithmetic, not bad luck.
-# Raised close to full so a heal trip starts with enough buffer to
-# absorb two such fights back to back before it can reach safety.
-HEAL_BELOW_FRACTION = 0.97
+# 0.97 was tuned for the Lv13-14 party (see grind_route3_party.py for
+# why it still wasn't enough -- that was an HP-arithmetic problem, not
+# a threshold problem, and needed a level grind instead). At Lv20 a
+# clean win against the same trainer that used to cost 72% of max HP
+# now costs roughly 10-15% (measured live: 63->59, 59->51, 54->47), so
+# 0.97 would now trigger a heal trip on almost every single tile for no
+# real safety benefit. Lowered back down; the margin at this level can
+# afford it.
+HEAL_BELOW_FRACTION = 0.75
 MAX_HEAL_PRESSES = 40
 # Route 3 is a corridor, not a maze; walks never legitimately need the
 # forest's 10000-tile search budget.
@@ -170,8 +166,17 @@ def build_worker_heal_if_needed(handle_battle):
 
 
 def main():
+    # route3_leveled (Lv20, see grind_route3_party.py) rather than the
+    # original Lv13-14 route3_entry: a live probe showed a heal trip
+    # from underlevelled costs 72% of max HP on a clean win against the
+    # trainer guarding the route east, which is why the first two
+    # surveys dead-ended at exactly the tiles whose heal trip crossed
+    # it. At Lv20 the same round trip succeeds outright and surfaces
+    # real new territory (trainers as far as x=22 in a previously
+    # unexplored row) along the way.
+    state_name = sys.argv[1] if len(sys.argv) > 1 else "route3_leveled"
     build(
-        "route3_entry", "route3",
+        state_name, "route3",
         build_handle_battle=build_worker_handle_battle,
         build_heal_if_needed=build_worker_heal_if_needed,
     )
