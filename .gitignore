@@ -43,6 +43,10 @@ models/**
 !models/*.zip
 !models/*_q_table.json
 !models/*_parallel_state.json
+# The curriculum driver's per-stage record (which stages mastered, in how
+# many rounds, at what accuracy) -- the primary readout of whether the
+# curriculum works at all, and not reconstructable after the fact.
+!models/*_stages.json
 models/parallel_workers/
 models/parallel_survey_workers/
 
