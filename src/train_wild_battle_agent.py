@@ -39,18 +39,36 @@ def main(total_timesteps=200000):
     # value. Raised 4x, with the replay buffer raised alongside it so
     # the rarer catch-sequence transitions it does see stick around for
     # more replay passes instead of being evicted quickly.
+    #
+    # learning_rate and target_update_interval changed again after that
+    # 200k run: mixing weakened-HP reset states into the pool (see
+    # wild_battle_env.py) produces far more short, high-reward episodes,
+    # and at 1e-3/250 the result was outright divergence, not a slow
+    # learner -- eval showed Q-values around 25-30 against a reward
+    # scale that tops out near 15-17, and the greedy policy had
+    # collapsed onto spamming Tail Whip (a zero-damage status move)
+    # every single turn regardless of state, going 0-for-100. SB3's
+    # core DQN bootstraps off its own target network's max (it isn't
+    # Double DQN), so it always carries some overestimation bias; a
+    # high learning rate plus frequent target syncs let that bias
+    # compound faster than it could correct, and the new pool's glut of
+    # short high-value episodes gave it more to run away on. Lowering
+    # the learning rate 10x and syncing the target net 4x less often
+    # verified clean at both 4k and 15k steps (sane Q-value magnitudes,
+    # varying argmax across states, no collapse) before committing to
+    # spending another full-length run on it.
     env = Monitor(PokemonRedWildBattleEnv(max_steps=30))
 
     model = DQN(
         "MlpPolicy",
         env,
-        learning_rate=1e-3,
+        learning_rate=1e-4,
         buffer_size=50000,
         learning_starts=200,
         batch_size=64,
         gamma=0.99,
         train_freq=1,
-        target_update_interval=250,
+        target_update_interval=1000,
         exploration_fraction=0.3,
         exploration_final_eps=0.05,
         policy_kwargs=dict(net_arch=[64, 64]),
