@@ -38,6 +38,22 @@ FINAL_STAGE = 125
 # forever on tiles that are not actually wrong.
 MASTERY_ACCURACY = 0.97
 
+
+def is_mastered(correct, seen):
+    """
+    Wrong-tile budget rather than a bare percentage. At small stages the
+    percentage collapses into perfection -- 97% of stage 15's 30 tiles is
+    29.1, i.e. 30/30 -- and at least one tile there has a corrupted
+    answer key (the survey snapshotted it mid trainer-sighting, recording
+    edges from a frozen cutscene), so perfection is not merely hard, it
+    can be structurally unreachable. One wrong tile is always allowed;
+    larger stages keep the 3% budget the percentage always gave them.
+    """
+    if seen == 0:
+        return False
+    allowed = max(1, int(seen * (1.0 - MASTERY_ACCURACY)))
+    return (seen - correct) <= allowed
+
 # Give up on a stage rather than grinding it forever. Hitting this is
 # information, not just a timeout: it means visiting those tiles
 # constantly still is not fixing them, which would point at the reward or
@@ -145,7 +161,7 @@ def main():
             f"max_steps={max_steps}, accuracy {accuracy:.1%} ({correct}/{seen}) ==="
         )
 
-        if accuracy >= MASTERY_ACCURACY:
+        if is_mastered(correct, seen):
             print(f"already at or above {MASTERY_ACCURACY:.0%}; advancing")
             log_stage({"stage": stage, "rounds": 0, "accuracy": accuracy,
                        "correct": correct, "seen": seen, "mastered": True})
@@ -169,6 +185,19 @@ def main():
                 max_steps=max_steps,
                 max_rounds=next_round,
             )
+
+            # A Ctrl-C lands inside train(), which abandons the round and
+            # returns normally -- so without this the stage loop would
+            # relaunch immediately, making the driver impossible to exit
+            # (each ^C also burned a phantom stage round: rounds_done
+            # advanced with zero episodes trained). An abandoned round is
+            # detectable as the state file not advancing; treat it as the
+            # interrupt it is and stop the whole driver.
+            after = load_progress(STATE_PATH)
+            if (after["round"] if after else 0) < next_round:
+                print("round was abandoned (Ctrl-C); stopping the curriculum "
+                      "driver -- relaunch to resume this stage")
+                return 130
             rounds_done += 1
 
             accuracy, correct, seen = stage_accuracy(stage, edges)
@@ -177,10 +206,10 @@ def main():
                   f"accuracy {accuracy:.1%} ({correct}/{seen}), "
                   f"whole-map {overall_acc:.1%} ({overall_correct}/{overall_seen})")
 
-            if accuracy >= MASTERY_ACCURACY:
+            if is_mastered(correct, seen):
                 break
 
-        mastered = accuracy >= MASTERY_ACCURACY
+        mastered = is_mastered(correct, seen)
         log_stage({"stage": stage, "rounds": rounds_done, "accuracy": accuracy,
                    "correct": correct, "seen": seen, "mastered": mastered,
                    "whole_map_accuracy": overall_acc})

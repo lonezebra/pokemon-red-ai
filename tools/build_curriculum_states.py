@@ -74,10 +74,10 @@ def load_forward_graph():
     return graph
 
 
-def next_move_toward_goal(graph, tile):
+def next_move_toward_goal(graph, tile, target=GOAL_TILE):
     """
-    First move of a shortest path from `tile` to the goal, or None if the
-    goal is unreachable from here.
+    First move of a shortest path from `tile` to `target` (the goal by
+    default), or None if it is unreachable from here.
 
     Forward BFS rather than a greedy descent of the precomputed
     distance-to-goal map: those distances are correct, but reading a move
@@ -86,7 +86,7 @@ def next_move_toward_goal(graph, tile):
     always reachable from here. Searching forward over the real edges
     answers the question directly.
     """
-    if tile == GOAL_TILE:
+    if tile == target:
         return None
 
     previous = {tile: None}
@@ -94,7 +94,7 @@ def next_move_toward_goal(graph, tile):
     found = False
     while queue:
         node = queue.popleft()
-        if node == GOAL_TILE:
+        if node == target:
             found = True
             break
         for direction, neighbor in graph.get(node, []):
@@ -105,7 +105,7 @@ def next_move_toward_goal(graph, tile):
     if not found:
         return None
 
-    node = GOAL_TILE
+    node = target
     while previous[node] is not None:
         parent, direction = previous[node]
         if parent == tile:
