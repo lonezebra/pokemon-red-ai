@@ -284,7 +284,7 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
                 lost = chunks[worker_index]
                 print(f"  worker {worker_index} produced no output "
                       f"(process crashed); requeueing its {len(lost)} tiles")
-                for key, _snapshot in lost:
+                for key, _ in lost:
                     queue.append(key)
                 continue
             path.unlink()
