@@ -93,6 +93,8 @@ class PokemonRedForestEnv:
         self.step_count = 0
         self.visited_positions = set()
         self.probed_trainer_moves = set()
+        self._blocked_streak = 0
+        self._blocked_tile = None
         self.trainer_model = DQN.load(str(TRAINER_MODEL_PATH))
 
     def _handle_battle(self, pyboy):
@@ -136,7 +138,23 @@ class PokemonRedForestEnv:
         of a predicate that isn't purely a question.
         """
         tile = (before["x"], before["y"])
-        if tile not in KNOWN_TRAINER_TILES:
+
+        # A tile can be inside a trainer's line of sight without being in
+        # KNOWN_TRAINER_TILES, because those were captured from a single
+        # approach direction each: the trainer engaged from (2,19) also
+        # sights a player arriving at (1,18), and walking onto such a
+        # tile starts the sighting cutscene -- control locked until the
+        # pre-battle dialogue is advanced, which only the probe's A
+        # presses ever do. Without this clause an episode routed through
+        # a secondary sighting tile was simply frozen until max_steps:
+        # every direction blocked, the probe gated off, no Q-value able
+        # to change what the env physically couldn't act on. Three
+        # consecutive blocked steps on one tile is the signature (a
+        # plain wall bump never repeats from the same tile that often
+        # under epsilon-greedy without being frozen), so treat the tile
+        # as suspect and pay for one probe.
+        suspicious = self._blocked_streak >= 3
+        if tile not in KNOWN_TRAINER_TILES and not suspicious:
             return False
 
         attempt = (tile, direction)
@@ -159,6 +177,8 @@ class PokemonRedForestEnv:
         # is undefeated again, so last episode's probes say nothing about
         # this one.
         self.probed_trainer_moves = set()
+        self._blocked_streak = 0
+        self._blocked_tile = None
         self.min_distance = None
 
         position = get_player_position(self.pyboy)
@@ -182,6 +202,22 @@ class PokemonRedForestEnv:
         )
 
         after = get_player_position(self.pyboy)
+
+        # Feed the secondary-sighting detector in _should_engage_trainer:
+        # count consecutive steps that failed to move off one tile. The
+        # predicate runs mid-_step and sees the streak as of the previous
+        # steps, which is the correct reading -- this step's own outcome
+        # can't be known while it is still deciding whether to probe.
+        stuck_here = position_key(before) == position_key(after)
+        if stuck_here and self._blocked_tile == position_key(before):
+            self._blocked_streak += 1
+        elif stuck_here:
+            self._blocked_tile = position_key(before)
+            self._blocked_streak = 1
+        else:
+            self._blocked_tile = None
+            self._blocked_streak = 0
+
         reward = calculate_forest_reward(before=before, after=after)
 
         self.visited_positions.add(position_key(after))
