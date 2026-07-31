@@ -336,5 +336,104 @@
       "steps": 92,
       "start": "d080_23_9.state"
     }
+  },
+  {
+    "stage": 85,
+    "rounds": 3,
+    "accuracy": 0.8957654723127035,
+    "correct": 275,
+    "seen": 307,
+    "mastered": true,
+    "whole_map_accuracy": 0.9353932584269663,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 99,
+      "start": "d085_25_12.state"
+    }
+  },
+  {
+    "stage": 90,
+    "rounds": 0,
+    "accuracy": 0.8950437317784257,
+    "correct": 307,
+    "seen": 343,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 106,
+      "start": "d090_25_17.state"
+    }
+  },
+  {
+    "stage": 95,
+    "rounds": 0,
+    "accuracy": 0.8987341772151899,
+    "correct": 355,
+    "seen": 395,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 112,
+      "start": "d095_26_22.state"
+    }
+  },
+  {
+    "stage": 100,
+    "rounds": 0,
+    "accuracy": 0.9014084507042254,
+    "correct": 384,
+    "seen": 426,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 117,
+      "start": "d100_26_27.state"
+    }
+  },
+  {
+    "stage": 105,
+    "rounds": 0,
+    "accuracy": 0.9032967032967033,
+    "correct": 411,
+    "seen": 455,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 122,
+      "start": "d105_26_34.state"
+    }
+  },
+  {
+    "stage": 110,
+    "rounds": 0,
+    "accuracy": 0.9075975359342916,
+    "correct": 442,
+    "seen": 487,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 127,
+      "start": "d110_26_39.state"
+    }
+  },
+  {
+    "stage": 115,
+    "rounds": 0,
+    "accuracy": 0.9119373776908023,
+    "correct": 466,
+    "seen": 511,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 132,
+      "start": "d115_25_43.state"
+    }
   }
 ]
