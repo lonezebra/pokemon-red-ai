@@ -44,7 +44,20 @@ PEWTER_CITY_MAP_ID = 2
 PEWTER_POKECENTER_MAP_ID = 58
 ROUTE_3_MAP_ID = 14
 
-HEAL_BELOW_FRACTION = 0.85
+# 0.85 was the forest survey's value, carried over without re-deriving
+# it for this route's numbers -- wrong to assume it would transfer.
+# Measured directly: arriving at (11,5) triggered a heal trip at 44% HP
+# (below 0.85), and the walk back to Pewter passes through *more*
+# trainers before reaching the Center -- Route 3 is denser than the
+# forest, roughly one trainer every few tiles. The first en-route fight
+# alone cost 16 of 41 max HP (~40%), leaving 1/43; the very next
+# trainer, fought at that margin, ended the run. No battle policy wins
+# a fight starting at 1 HP -- this was never a policy weakness, four
+# retries of the exact same heal trip all failed the same way because
+# the mechanism is deterministic HP arithmetic, not bad luck.
+# Raised close to full so a heal trip starts with enough buffer to
+# absorb two such fights back to back before it can reach safety.
+HEAL_BELOW_FRACTION = 0.97
 MAX_HEAL_PRESSES = 40
 # Route 3 is a corridor, not a maze; walks never legitimately need the
 # forest's 10000-tile search budget.
