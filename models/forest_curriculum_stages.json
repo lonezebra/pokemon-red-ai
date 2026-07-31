@@ -251,5 +251,90 @@
       "steps": 60,
       "start": "d050_11_5.state"
     }
+  },
+  {
+    "stage": 55,
+    "rounds": 2,
+    "accuracy": 0.9010989010989011,
+    "correct": 164,
+    "seen": 182,
+    "mastered": true,
+    "whole_map_accuracy": 0.9283707865168539,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 65,
+      "start": "d055_11_10.state"
+    }
+  },
+  {
+    "stage": 60,
+    "rounds": 0,
+    "accuracy": 0.9035532994923858,
+    "correct": 178,
+    "seen": 197,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 70,
+      "start": "d060_11_15.state"
+    }
+  },
+  {
+    "stage": 65,
+    "rounds": 0,
+    "accuracy": 0.9112149532710281,
+    "correct": 195,
+    "seen": 214,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 75,
+      "start": "d065_15_16.state"
+    }
+  },
+  {
+    "stage": 70,
+    "rounds": 0,
+    "accuracy": 0.9083333333333333,
+    "correct": 218,
+    "seen": 240,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 80,
+      "start": "d070_18_14.state"
+    }
+  },
+  {
+    "stage": 75,
+    "rounds": 0,
+    "accuracy": 0.90234375,
+    "correct": 231,
+    "seen": 256,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 85,
+      "start": "d075_18_9.state"
+    }
+  },
+  {
+    "stage": 80,
+    "rounds": 0,
+    "accuracy": 0.8928571428571429,
+    "correct": 250,
+    "seen": 280,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 92,
+      "start": "d080_23_9.state"
+    }
   }
 ]
