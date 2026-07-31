@@ -58,6 +58,23 @@ LEVELED_STATE_PATH = PROJECT_ROOT / "saves" / "route3_leveled.state"
 
 GRIND_MAP_ID = 13  # Route 2
 
+
+def return_to_grind_map(pyboy):
+    """
+    Two-hop walk back to Route 2: Pewter City first, then Route 2.
+
+    walk_to_map only ever searches doorways on the map the player is
+    currently standing on (this project has hit that exact lesson twice
+    now, both times in survey_route3.py's own heal trip). Healing
+    leaves the party inside the Center (map 58), which has no direct
+    doorway to Route 2 -- asking walk_to_map for GRIND_MAP_ID straight
+    from there can never succeed. Confirmed live: the first full grind
+    run healed successfully (HP back to 41/41) and then failed this
+    exact call, stranding the run at the Center.
+    """
+    walk_to_map(pyboy, PEWTER_CITY_MAP_ID, max_tiles=2000)
+    return walk_to_map(pyboy, GRIND_MAP_ID, max_tiles=3000)
+
 # Roughly proportionate to the forest's own Lv6->Lv10 jump (a level gap
 # clearing an unwinnable fight), scaled up since Route 3's opposition
 # levels (9-11) sit higher than the forest's (the current party is
@@ -82,11 +99,11 @@ def grind(pyboy, wild_model, trainer_model, target_level=TARGET_LEVEL, seed=0):
             if not heal_at_pewter_center(pyboy):
                 print("  heal failed -- stopping")
                 return battles
-            walk_to_map(pyboy, GRIND_MAP_ID, max_tiles=3000)
+            return_to_grind_map(pyboy)
             continue
 
         if get_player_position(pyboy)["map_id"] != GRIND_MAP_ID:
-            if not walk_to_map(pyboy, GRIND_MAP_ID, max_tiles=3000):
+            if not return_to_grind_map(pyboy):
                 print("  could not get back to Route 2 -- stopping")
                 return battles
             continue
