@@ -81,5 +81,33 @@
     "seen": 61,
     "mastered": false,
     "whole_map_accuracy": 0.9213483146067416
+  },
+  {
+    "stage": 10,
+    "rounds": 0,
+    "accuracy": 1.0,
+    "correct": 19,
+    "seen": 19,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 11,
+      "start": "d010_1_11.state"
+    }
+  },
+  {
+    "stage": 15,
+    "rounds": 0,
+    "accuracy": 0.9666666666666667,
+    "correct": 29,
+    "seen": 30,
+    "mastered": true,
+    "demo": {
+      "reached_goal": true,
+      "nudges": 0,
+      "steps": 20,
+      "start": "d015_1_18.state"
+    }
   }
 ]
