@@ -1,3 +1,17 @@
+import os
+
+# Headless unless explicitly asked otherwise, and this must run before any
+# core import, because core/config.py reads the variable at import time.
+#
+# The default is "SDL2", which opens a real Game Boy window. That is what
+# you want for watch_*.py, and actively harmful here: it renders every
+# frame to the screen at EMULATION_SPEED=0, i.e. as fast as the emulator
+# can produce them, dragging a training run that should take minutes into
+# a visibly "hung" one, and popping up an unwanted window on a machine
+# this might be run on unattended. GIFs are unaffected: the screen buffer
+# is still readable with no window.
+os.environ.setdefault("POKEMON_AI_WINDOW_MODE", "null")
+
 import json
 import math
 
