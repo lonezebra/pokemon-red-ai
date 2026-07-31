@@ -28,6 +28,8 @@ Differences from Route 1 worth noting:
 """
 
 import json
+import os
+import pathlib
 from datetime import datetime
 
 from envs.forest_env import PokemonRedForestEnv
@@ -36,7 +38,14 @@ from actions import num_actions
 from core.config import PROJECT_ROOT
 from rewards.forest_rewards import FOREST_MAP_ID
 
-MODEL_PATH = PROJECT_ROOT / "models" / "forest_q_table.json"
+# Overridable because the table that finally solved the forest is the
+# curriculum one (models/forest_curriculum_q_table.json), not the
+# entrance-run table this defaulted to -- pointing the mashup at a
+# specific table shouldn't require editing source.
+MODEL_PATH = pathlib.Path(
+    os.environ.get("POKEMON_RED_FOREST_TABLE")
+    or PROJECT_ROOT / "models" / "forest_q_table.json"
+)
 STATE_PATH = PROJECT_ROOT / "models" / "forest_parallel_state.json"
 MASHUP_DIR = PROJECT_ROOT / "screenshots" / "mashups"
 
