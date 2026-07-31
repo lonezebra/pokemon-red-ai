@@ -109,5 +109,20 @@
       "steps": 20,
       "start": "d015_1_18.state"
     }
+  },
+  {
+    "stage": 20,
+    "rounds": 12,
+    "accuracy": 1.0,
+    "correct": 42,
+    "seen": 42,
+    "mastered": false,
+    "whole_map_accuracy": 0.922752808988764,
+    "demo": {
+      "reached_goal": false,
+      "nudges": 30,
+      "steps": 250,
+      "start": "d020_2_22.state"
+    }
   }
 ]
