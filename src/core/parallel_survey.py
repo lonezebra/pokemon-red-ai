@@ -112,17 +112,45 @@ def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
                          # ledge can be walked down but not back up) a same-tile-distance
                          # geometric guess would get wrong.
     frames = [] if capture_frames else None
+    errors = []  # (key, direction, repr(exception)), for a battle handler that raises
 
     for key, snapshot in assigned:
         _restore(pyboy, snapshot)
 
-        if heal_if_needed is not None and heal_if_needed(pyboy, key):
-            snapshot = _snapshot(pyboy)
-            refreshed[key] = snapshot
+        try:
+            if heal_if_needed is not None and heal_if_needed(pyboy, key):
+                snapshot = _snapshot(pyboy)
+                refreshed[key] = snapshot
+        except Exception as exc:
+            # heal_if_needed already treats its own travel failures as
+            # best-effort (returns False rather than raising), but a
+            # handle_battle passed through it can still raise -- a
+            # not-yet-discovered trainer encountered mid-heal-trip, say.
+            # Recorded and skipped rather than crashing the worker: one
+            # tile misexplored this round is nothing next to losing every
+            # other tile this worker was assigned along with it.
+            errors.append((key, "heal", repr(exc)))
+            continue
 
         for direction in DIRECTIONS:
             _restore(pyboy, snapshot)
-            moved = _step(pyboy, direction, handle_battle=handle_battle)
+            try:
+                moved = _step(pyboy, direction, handle_battle=handle_battle)
+            except Exception as exc:
+                # A raised handle_battle (survey_viridian_forest's aborts
+                # loudly on a lost trainer fight, by design -- the battle
+                # policy is not 100% deterministic, so a loss during a
+                # long survey is a real, if rare, possibility rather than
+                # a bug). Before this, an uncaught exception here killed
+                # the whole worker process without writing its output
+                # file, and the driver's own open() on the now-missing
+                # path then raised an unrelated FileNotFoundError --
+                # burying the actual cause behind a confusing symptom,
+                # exactly what happened live surveying Route 3. Recording
+                # it here and moving to the next direction costs one
+                # untried move, not the whole worker's remaining tiles.
+                errors.append((key, direction, repr(exc)))
+                continue
             position = get_player_position(pyboy)
 
             if position["map_id"] != start_map:
@@ -147,7 +175,7 @@ def _run_worker(assigned, start_map, build_handle_battle, build_heal_if_needed,
     with open(output_path, "wb") as f:
         pickle.dump(
             {"new_tiles": new_tiles, "exits": exits, "refreshed": refreshed,
-             "edges": edges, "frames": frames},
+             "edges": edges, "frames": frames, "errors": errors},
             f,
         )
 
@@ -237,10 +265,33 @@ def parallel_survey_map(save_state_path, max_tiles=5000, build_handle_battle=Non
             p.join()
 
         new_this_round = 0
-        for path in output_paths:
-            with open(path, "rb") as f:
-                result = pickle.load(f)
+        for worker_index, path in enumerate(output_paths):
+            try:
+                with open(path, "rb") as f:
+                    result = pickle.load(f)
+            except FileNotFoundError:
+                # _run_worker now catches everything survey-related
+                # itself (a lost trainer battle, a failed heal trip) and
+                # keeps going -- this path is left for what it can't
+                # catch, like the process dying outright. Previously an
+                # uncaught exception anywhere in a worker crashed the
+                # whole build() call on a FileNotFoundError that named
+                # the missing pickle, not the real cause; requeuing here
+                # at least keeps the survey itself alive and correct
+                # (its assigned tiles are retried, not silently dropped
+                # from the count as if they had been explored) even
+                # though the underlying crash still deserves a look.
+                lost = chunks[worker_index]
+                print(f"  worker {worker_index} produced no output "
+                      f"(process crashed); requeueing its {len(lost)} tiles")
+                for key, _snapshot in lost:
+                    queue.append(key)
+                continue
             path.unlink()
+
+            if result.get("errors"):
+                for key, direction, error in result["errors"]:
+                    print(f"  worker {worker_index}: {key} {direction} -> {error}")
 
             for key, snap in result["refreshed"].items():
                 states[key] = snap
