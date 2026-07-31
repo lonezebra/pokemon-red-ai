@@ -4,7 +4,7 @@ import os
 os.environ.setdefault("POKEMON_AI_WINDOW_MODE", "null")
 
 from core.config import PROJECT_ROOT  # noqa: E402
-from core.controls import press_button, walk_tile  # noqa: E402
+from core.controls import press_button, walk_tile, wait_for_free_movement  # noqa: E402
 from core.emulator import run_frames  # noqa: E402
 from core.memory import (  # noqa: E402
     get_party_hp,
@@ -76,11 +76,24 @@ def heal_at_pewter_center(pyboy, handle_battle=None):
 
     for _ in range(MAX_HEAL_PRESSES):
         if get_party_hp(pyboy) >= get_party_max_hp(pyboy):
-            return True
+            break
         press_button(pyboy, "a", hold_frames=12, release_frames=26)
         run_frames(pyboy, 20)
 
-    return get_party_hp(pyboy) >= get_party_max_hp(pyboy)
+    if get_party_hp(pyboy) < get_party_max_hp(pyboy):
+        return False
+
+    # HP reads full mid-animation, before the nurse's trailing "OK.
+    # We'll need your POKEMON." (or the following "Thank you...") box
+    # has actually been cleared -- stopping on the HP read alone left
+    # the player frozen behind a live text box that every direction then
+    # reads as blocked, the same class of bug clear_overworld_dialogue
+    # fixed for a beaten forest trainer's parting line. Confirmed live:
+    # walk_to_map(2) failing right after a "successful" heal, and a
+    # screenshot at that exact point showing the dialogue box still up.
+    # wait_for_free_movement presses A until a real step succeeds, then
+    # undoes that probe step, so it can't leave the player elsewhere.
+    return wait_for_free_movement(pyboy)
 
 
 def make_heal_if_needed(handle_battle):
@@ -104,6 +117,19 @@ def make_heal_if_needed(handle_battle):
 
         if not heal_at_pewter_center(pyboy, handle_battle=handle_battle):
             print(f"    could not reach Pewter's Center from {key}; continuing unhealed")
+            return False
+
+        # walk_to_map only ever searches doorways on the map the player
+        # is currently standing on (create_leveled_state.travel_to hit
+        # this same lesson) -- healing leaves the party inside the
+        # Center (map 58), which has no direct doorway to Route 3, so
+        # asking for ROUTE_3_MAP_ID from there can never succeed. Step
+        # out to Pewter City first, then to Route 3, matching the two
+        # real doorways actually being crossed.
+        if not walk_to_map(pyboy, PEWTER_CITY_MAP_ID, handle_battle=handle_battle,
+                            max_tiles=TRAVEL_MAX_TILES):
+            print("    healed, but could not get back to Pewter City; "
+                  "continuing from the pre-heal snapshot")
             return False
 
         if not walk_to_map(pyboy, ROUTE_3_MAP_ID, handle_battle=handle_battle,
