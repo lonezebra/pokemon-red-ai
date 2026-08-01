@@ -423,3 +423,28 @@ def randomize_battle_mon_stats(pyboy, rng):
     write_u16(pyboy, ADDR_BATTLE_MON_DEFENSE, rng.randint(*BATTLE_MON_STAT_RANGES["defense"]))
     write_u16(pyboy, ADDR_BATTLE_MON_SPEED, rng.randint(*BATTLE_MON_STAT_RANGES["speed"]))
     write_u16(pyboy, ADDR_BATTLE_MON_SPECIAL, rng.randint(*BATTLE_MON_STAT_RANGES["special"]))
+
+
+# The Pokedex's own "owned" bitfield, 19 bytes covering National Dex #1-152
+# (one bit each, #152 unused). Deliberately not indexed by species here the
+# way wild_battle_env's species_already_caught is -- that would need a full
+# internal-index -> National Dex lookup table (the exact thing avoided
+# earlier for the same reason: pure transcription risk to hardcode from
+# memory rather than verify). A raw population count over these bytes needs
+# no such table, since it only asks "how many species has the game itself
+# marked owned", not "which ones".
+#
+# Verified against known-good states: starter_obtained.state, route_1_
+# entry.state, and route3_entry.state (before any catching existed in this
+# project) all read exactly 1 -- the starter, the only Pokemon any of them
+# could have owned. route3_leveled.state reads 2, picked up somewhere
+# during that state's own grind.
+ADDR_POKEDEX_OWNED_START = 0xD2F7
+POKEDEX_OWNED_BYTES = 19
+
+
+def get_pokedex_owned_count(pyboy):
+    return sum(
+        bin(pyboy.memory[ADDR_POKEDEX_OWNED_START + i]).count("1")
+        for i in range(POKEDEX_OWNED_BYTES)
+    )
