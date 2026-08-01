@@ -86,6 +86,25 @@ ADDR_BAG_ITEMS = 0xD31E
 MAX_BAG_ITEMS = 20
 
 OAKS_PARCEL_ITEM_ID = 70
+POKE_BALL_ITEM_ID = 4
+
+# Player's money, BCD-encoded across 3 bytes (each byte holds two decimal
+# digits, e.g. 0x23 means "23" not 35). Verified against the actual Mart
+# screen, not just the well-known disassembly address: 0xD347 read as
+# [0x00, 0x23, 0x19] and the buy-menu's own on-screen total read ¥2319 --
+# an exact match once decoded as BCD rather than raw binary.
+ADDR_MONEY = 0xD347
+
+
+def _bcd_to_int(byte):
+    return (byte >> 4) * 10 + (byte & 0x0F)
+
+
+def get_money(pyboy):
+    return sum(
+        _bcd_to_int(pyboy.memory[ADDR_MONEY + i]) * (100 ** (2 - i))
+        for i in range(3)
+    )
 
 
 # The first party Pokemon, readable outside battle (the battle_struct
@@ -129,6 +148,47 @@ def get_party_hp_fraction(pyboy):
 def get_bag_item_ids(pyboy):
     count = min(pyboy.memory[ADDR_NUM_BAG_ITEMS], MAX_BAG_ITEMS)
     return [pyboy.memory[ADDR_BAG_ITEMS + i * 2] for i in range(count)]
+
+
+def get_bag_item_quantity(pyboy, item_id):
+    """0 if the item isn't held at all, matching has_item's convention
+    of a plain boolean-ish read rather than raising on absence."""
+    count = min(pyboy.memory[ADDR_NUM_BAG_ITEMS], MAX_BAG_ITEMS)
+    for i in range(count):
+        if pyboy.memory[ADDR_BAG_ITEMS + i * 2] == item_id:
+            return pyboy.memory[ADDR_BAG_ITEMS + i * 2 + 1]
+    return 0
+
+
+def set_bag_item_quantity(pyboy, item_id, quantity):
+    """
+    Write `quantity` of `item_id` directly into the bag -- updating an
+    existing stack in place, or appending a new one and rewriting the
+    count/terminator, matching the format verified live against a real
+    purchase: a count byte, then (item_id, quantity) pairs, then a 0xFF
+    terminator (confirmed byte-for-byte: [0x03, 0x0B,0x01, 0xEA,0x01,
+    0x04,0x0A, 0xFF, ...] for a real 3-item bag holding 10 Poke Balls).
+
+    Exists so training envs that reset from a save state captured with
+    an empty bag (every wild-encounter state predates this project ever
+    needing an item) can still guarantee Poke Balls are available every
+    episode, the same way randomize_battle_mon_stats already writes
+    battle stats directly at reset rather than depending on the save
+    file to have the right ones baked in.
+    """
+    count = min(pyboy.memory[ADDR_NUM_BAG_ITEMS], MAX_BAG_ITEMS)
+    for i in range(count):
+        if pyboy.memory[ADDR_BAG_ITEMS + i * 2] == item_id:
+            pyboy.memory[ADDR_BAG_ITEMS + i * 2 + 1] = quantity
+            return
+
+    if count >= MAX_BAG_ITEMS:
+        raise ValueError(f"bag is full ({MAX_BAG_ITEMS} items), cannot add item {item_id}")
+
+    pyboy.memory[ADDR_BAG_ITEMS + count * 2] = item_id
+    pyboy.memory[ADDR_BAG_ITEMS + count * 2 + 1] = quantity
+    pyboy.memory[ADDR_BAG_ITEMS + count * 2 + 2] = 0xFF
+    pyboy.memory[ADDR_NUM_BAG_ITEMS] = count + 1
 
 
 def has_item(pyboy, item_id):

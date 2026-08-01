@@ -2,8 +2,14 @@ import io
 from collections import deque
 
 from core.emulator import run_frames
-from core.controls import walk_tile, attempt_run_from_wild_battle, wait_for_position_to_settle
-from core.memory import get_player_position, is_in_battle
+from core.controls import (
+    walk_tile,
+    press_button,
+    attempt_run_from_wild_battle,
+    wait_for_position_to_settle,
+    clear_overworld_dialogue,
+)
+from core.memory import get_player_position, is_in_battle, get_battle_type
 
 # General-purpose overworld pathfinding scaffolding.
 #
@@ -56,14 +62,188 @@ def _restore(pyboy, data):
     run_frames(pyboy, 2)
 
 
-def _step(pyboy, direction):
-    """One tile move, fleeing any wild encounter it triggers."""
+def _settled_battle_type(pyboy, max_polls=20):
+    """
+    The battle type, once it has stopped changing.
+
+    `is_in_battle` and `get_battle_type` read the *same* byte: the flag is
+    "non-zero" and the type is the value (1 = wild, 2 = trainer). Code that
+    tests the flag and immediately reads the type is therefore reading one
+    byte twice during a transition, and can catch it before the game has
+    written the value it settles on.
+
+    That race is not theoretical. Misreading it meant a trainer battle was
+    classified as something else, so nothing fought it -- and nothing could,
+    because Gen 1 forbids fleeing a trainer. Every later step tried to run,
+    failed, and left the text box up with its cursor blinking while the
+    episode burned its remaining steps doing nothing.
+
+    Polls until two consecutive reads agree on a real value rather than
+    waiting a fixed number of frames, since how long the transition takes is
+    exactly the thing not worth guessing at.
+    """
+    previous = None
+    for _ in range(max_polls):
+        current = get_battle_type(pyboy)
+        if current in (1, 2) and current == previous:
+            return current
+        previous = current
+        run_frames(pyboy, 5)
+    return get_battle_type(pyboy)
+
+
+def _resolve_any_battle(pyboy, handle_battle=None):
+    """
+    Leave no battle unresolved, whatever kind it turns out to be.
+
+    The invariant: `_step` never returns with the emulator still in a battle.
+    Breaking it is unrecoverable rather than merely wasteful, because a
+    caller that walks away from a trainer battle can only try to flee on
+    later steps, and fleeing a trainer is impossible -- so the run wedges
+    permanently instead of degrading.
+
+    A misclassified battle is therefore fought rather than abandoned. If
+    fleeing fails and a handler exists, the handler is used even for what
+    looked like a wild encounter: winning a fight we did not mean to pick
+    costs some HP, while being stuck costs the whole episode.
+    """
+    if not is_in_battle(pyboy):
+        return
+
+    if _settled_battle_type(pyboy) == 2:
+        # Nothing to gain from attempting to run; Gen 1 does not permit it.
+        if handle_battle is not None:
+            handle_battle(pyboy)
+        return
+
+    attempt_run_from_wild_battle(pyboy)
+
+    if is_in_battle(pyboy) and handle_battle is not None:
+        handle_battle(pyboy)
+
+
+def _try_engage_trainer(pyboy, max_presses=12):
+    """
+    Press A repeatedly to see whether a blocked tile is a trainer, rather
+    than a genuine wall.
+
+    Confirmed empirically while building create_trainer_battle_states.py:
+    unlike the wild encounters this project has handled everywhere else,
+    walking toward a trainer's tile does not start their battle by
+    itself -- it just blocks the move, the same as any other impassable
+    tile. Only talking to them does, and their pre-battle line comes
+    first, so the press has to repeat until the battle actually begins
+    rather than checking once.
+
+    When no battle starts, the dialogue those presses opened has to be
+    closed again, or the caller is left unable to move at all. That is not
+    hypothetical: a trainer who has already been beaten still stands on
+    their tile in Gen 1, and talking to them gives a post-battle line
+    instead of a fight, so this loop exhausts its presses with a text box
+    left on screen. Every direction then reads as blocked, and an agent
+    reading that as "walls everywhere" simply stops making progress --
+    observed directly as workers appearing stuck in a trainer conversation.
+
+    A cannot be used to clear it, which is why this needs an explicit step
+    rather than one more press. A both advances text *and* starts
+    conversations, so pressing it while still facing the trainer closes one
+    box and opens the next; measured from a captured stuck state, eight A
+    presses left the player exactly as stuck, while eight B presses restored
+    movement. See core.controls.clear_overworld_dialogue and
+    tools/find_dialogue_recovery.py.
+    """
+    for _ in range(max_presses):
+        press_button(pyboy, "a", hold_frames=12, release_frames=26)
+        run_frames(pyboy, 20)
+        if is_in_battle(pyboy):
+            return _settled_battle_type(pyboy) == 2
+
+    # Only reached when no battle started, so this never interferes with a
+    # battle in progress -- the in-battle cases return above.
+    clear_overworld_dialogue(pyboy)
+    return False
+
+
+WALL_RETRIES = 3
+
+
+def _step(pyboy, direction, handle_battle=None, should_engage_trainer=None):
+    """
+    One tile move, fleeing any wild encounter it triggers.
+
+    `handle_battle(pyboy)`, if given, is tried when a blocked move turns
+    out to be a trainer rather than a wall (unlike a wild Pokemon, Gen 1
+    does not allow fleeing one at all -- without a handler, a trainer is
+    simply unreachable, which is correct for any map whose trainers can't
+    yet be beaten). Probing for one is only attempted when a handler is
+    given: pressing A into whatever is blocking the way is harmless for a
+    trainer, but would have unwanted side effects elsewhere (opening a
+    sign's text, talking to an unrelated NPC) on any map that doesn't
+    have trainers to find this way. If the handler clears the battle, the
+    step is retried once, since the block was the trainer's presence, not
+    the tile itself.
+
+    `should_engage_trainer(before_position, direction)`, if given, gates
+    the probe itself. `_try_engage_trainer` spends up to 12 button presses
+    of ~58 ticked frames each, which measures at roughly 0.2s of wall time
+    (headless PyBoy runs about fifty times real-time, so its ~11s of
+    *emulated* time is not 11s of anything a person waits for -- see
+    tools/test_trainer_probe_cost.py, written after an earlier estimate
+    here confused the two). That is negligible for a bounded one-shot BFS,
+    where each tile's walls are only ever bumped once, but it adds up in RL
+    training, where a near-random policy re-bumps the same walls tens of
+    thousands of times per round.
+
+    It receives the direction as well as the position because whether a
+    probe is worth paying for depends on which way the blocked move went:
+    a tile can be adjacent to a trainer on one side and plain wall on the
+    others. Default (None) preserves the old always-probe behavior for
+    callers like the survey that rely on it to find trainers with no prior
+    knowledge of where they are.
+
+    A move that still looks blocked after that gets a few more plain
+    retries before it's accepted as a real wall. Every route and the
+    forest surveyed so far only ever had *stationary* trainers blocking
+    a tile, so one failed attempt was always conclusive there -- but
+    Viridian City has ordinary pedestrian NPCs that wander on their own
+    timer, and one can transiently stand in the way of a tile that is
+    otherwise perfectly walkable. Caught directly: a heal trip's return
+    path surveyed only 26 tiles out of Viridian City's north entrance,
+    with every exit leading right back the way it came -- looking exactly
+    like Route 22's real dead end, except a manual walk through the same
+    spot moments later got blocked once and then succeeded on an
+    immediate, otherwise-identical retry. One failure can't tell a real
+    wall from an NPC that will have stepped aside a moment later.
+    """
     before = get_player_position(pyboy)
 
     moved = walk_tile(pyboy, direction, verbose=False)
     run_frames(pyboy, 6)
+
     if is_in_battle(pyboy):
-        attempt_run_from_wild_battle(pyboy)
+        _resolve_any_battle(pyboy, handle_battle)
+    elif not moved and handle_battle is not None:
+        if (
+            should_engage_trainer is None
+            or should_engage_trainer(before, direction)
+        ) and _try_engage_trainer(pyboy):
+            handle_battle(pyboy)
+            moved = walk_tile(pyboy, direction, verbose=False)
+            run_frames(pyboy, 6)
+        else:
+            # A probe can start a battle and still report no trainer -- a wild
+            # encounter, or a type read that settled unexpectedly. Resolving
+            # here is what makes "never return mid-battle" hold on every path
+            # rather than only the expected one.
+            _resolve_any_battle(pyboy, handle_battle)
+
+    if not moved and not is_in_battle(pyboy):
+        for _ in range(WALL_RETRIES):
+            run_frames(pyboy, 15)
+            moved = walk_tile(pyboy, direction, verbose=False)
+            run_frames(pyboy, 6)
+            if moved:
+                break
 
     # Crossing a map boundary (a door, or a route edge) hands control
     # back only after the game finishes auto-walking the player clear of
@@ -76,7 +256,8 @@ def _step(pyboy, direction):
     return moved
 
 
-def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
+def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True, handle_battle=None,
+            heal_if_needed=None):
     """
     Search outward from the player's current position until reaching a
     tile where `predicate(position_dict)` is true, then leave the
@@ -87,6 +268,16 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
     keeps a search bounded to the current map, so looking for "the tile
     that exits to Route 1" doesn't wander off into Route 1 and start
     exploring that too. Pass False to search across map boundaries.
+
+    `handle_battle`, if given, is passed through to `_step` -- see there
+    for what it's for.
+
+    `heal_if_needed(pyboy, (x, y))`, if given, is called once per tile
+    dequeued for exploration, the same as `survey_map`'s parameter of the
+    same name -- necessary for any search deep enough to need HP managed
+    along the way, e.g. reaching a single faraway coordinate in Viridian
+    Forest by refighting every trainer along whichever path the BFS takes
+    there, the same as the main survey itself needs.
 
     Returns True and leaves the player at the target, or returns False
     and leaves the player where they started.
@@ -108,9 +299,14 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
     while queue and len(seen) < max_tiles:
         key = queue.popleft()
 
+        if heal_if_needed is not None:
+            _restore(pyboy, states[key])
+            if heal_if_needed(pyboy, key[1:]):
+                states[key] = _snapshot(pyboy)
+
         for direction in DIRECTIONS:
             _restore(pyboy, states[key])
-            moved = _step(pyboy, direction)
+            moved = _step(pyboy, direction, handle_battle=handle_battle)
             position = get_player_position(pyboy)
 
             changed_map = position["map_id"] != start_map
@@ -137,7 +333,8 @@ def walk_to(pyboy, predicate, max_tiles=DEFAULT_MAX_TILES, stay_on_map=True):
     return False
 
 
-def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None):
+def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None, handle_battle=None,
+               heal_if_needed=None):
     """
     Exhaustively flood-fill the map the player is standing on, without
     stepping off it, and report what is actually there:
@@ -150,6 +347,20 @@ def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None):
     tile while the emulator is actually standing on it -- which is what
     lets the map-panorama builder grab a screenshot of every tile rather
     than only the ones a random walk happened to cross.
+
+    `handle_battle(pyboy)`, if given, is passed through to `_step` so a
+    trainer occupying a tile can be fought and beaten rather than simply
+    read as a wall -- see `_step` for why that only applies to trainer
+    battles, never wild ones.
+
+    `heal_if_needed(pyboy, key)`, if given, is called once per tile
+    dequeued for exploration, before any of its four directions are
+    tried, and should return True if it took the party away to heal (in
+    which case its snapshot is refreshed to the now-healed state before
+    continuing). Needed for any map with more than one or two trainers to
+    fight through: nothing else here manages HP between battles, and a
+    policy measured only at full HP can lose fights it would otherwise
+    win once several have chipped away at it in a row.
 
     If the search finishes before hitting `max_tiles`, the result is
     complete: anything absent from `exits` genuinely is not reachable
@@ -178,9 +389,14 @@ def survey_map(pyboy, max_tiles=DEFAULT_MAX_TILES, on_visit=None):
     while queue and len(tiles) < max_tiles:
         key = queue.popleft()
 
+        if heal_if_needed is not None:
+            _restore(pyboy, states[key])
+            if heal_if_needed(pyboy, key):
+                states[key] = _snapshot(pyboy)
+
         for direction in DIRECTIONS:
             _restore(pyboy, states[key])
-            moved = _step(pyboy, direction)
+            moved = _step(pyboy, direction, handle_battle=handle_battle)
             position = get_player_position(pyboy)
 
             if position["map_id"] != start_map:

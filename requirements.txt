@@ -1,0 +1,32 @@
+# Pinned to the versions this project is actually known to run on, so a
+# fresh machine reproduces the same behavior rather than whatever the
+# latest releases happen to do. The README's "Try it yourself" section
+# previously installed these unpinned, which is fine until a new PyBoy
+# changes a memory-reading or save-state detail the whole project
+# depends on.
+#
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#
+# Python 3.11 is what's used here. PySDL2/pysdl2-dll come in via PyBoy;
+# they're pinned explicitly because the audio device they open is the
+# source of the harmless-but-noisy ALSA warnings in headless logs, and
+# knowing the exact version matters when that noise changes.
+#
+# torch is the CPU build's concern only. stable-baselines3 pulls it in
+# for the DQN policies, none of which are large enough to need a GPU --
+# the bottleneck in this project is PyBoy emulation, which is CPU-bound
+# single-threaded C, so cores beat accelerators here. If pip installs a
+# CUDA build by default and you don't want several GB of nvidia wheels,
+# install torch first from the CPU index:
+#
+#   pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu
+
+pyboy==2.7.0
+numpy==2.4.6
+pillow==12.3.0
+gymnasium==1.3.0
+stable_baselines3==2.9.0
+torch==2.13.0
+cloudpickle==3.1.2
+PySDL2==0.9.17
+pysdl2-dll==2.32.10

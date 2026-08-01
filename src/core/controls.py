@@ -203,6 +203,34 @@ def advance_battle_dialogue(pyboy, max_presses=60, hold_frames=10, release_frame
     return is_battle_menu_open(pyboy) or not is_in_battle(pyboy)
 
 
+def clear_overworld_dialogue(pyboy, max_presses=8):
+    """
+    Close an overworld text box with B, leaving the player able to walk.
+
+    B rather than A, and that is the whole point. Both advance Gen 1 text,
+    but A is also what *starts* a conversation, so pressing it while still
+    facing whoever is talking closes one box and immediately opens the next.
+    An agent doing that never escapes -- it just cycles.
+
+    Measured, not reasoned about: from a captured stuck state (an
+    already-beaten Viridian Forest trainer whose post-battle line was left
+    on screen), eight B presses restored movement, eight A presses did not,
+    and four B presses followed by four A presses did not either -- the
+    trailing A presses reopened what the B presses had closed. See
+    tools/find_dialogue_recovery.py, which compares each candidate from an
+    identical restored save state.
+
+    Distinct from wait_for_free_movement, which solves a similar problem by
+    *walking* until something succeeds. That works too, but it costs real
+    moves and, when the successful step crosses a map boundary, it does not
+    walk back -- from a tile beside an exit it silently relocates the
+    player. This only presses buttons, so position is never at risk.
+    """
+
+    for _ in range(max_presses):
+        press_button(pyboy, "b", hold_frames=12, release_frames=24)
+
+
 def attempt_run_from_wild_battle(pyboy, max_attempts=10):
     """
     Try to flee a wild battle by selecting RUN from the FIGHT/PKMN/ITEM/RUN
