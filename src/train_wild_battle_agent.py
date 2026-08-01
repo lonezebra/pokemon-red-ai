@@ -21,7 +21,7 @@ from core.config import PROJECT_ROOT
 MODEL_PATH = PROJECT_ROOT / "models" / "wild_battle_dqn.zip"
 
 
-def main(total_timesteps=200000):
+def main(total_timesteps=50000):
     # Same DQN setup as train_battle_agent.py (rival battle), still --
     # only the timestep/buffer budget changed. 50000 steps produced a
     # model that never once attempted to catch anything in 100 greedy
@@ -57,6 +57,24 @@ def main(total_timesteps=200000):
     # verified clean at both 4k and 15k steps (sane Q-value magnitudes,
     # varying argmax across states, no collapse) before committing to
     # spending another full-length run on it.
+    #
+    # That retrain still never once caught, and the exploration theory
+    # above (paragraph one) turned out to be wrong: a clean test found
+    # full-HP catch attempts succeed just as reliably as weakened ones
+    # (30/30), so there was never a narrow window being missed. The
+    # actual bug was in wild_battle_env.py -- species_already_caught was
+    # run-persistent, and with only 2 species in the current encounter
+    # pool, both got marked caught within ~20 steps under a random
+    # policy. For over 99.99% of every run so far, every catch scored
+    # only the small duplicate bonus, genuinely worse than winning, so
+    # the network's low CATCH value was a correct read of a broken
+    # incentive, not a training failure. With that fixed (cleared every
+    # reset() instead of once in __init__), a 15k-step probe here
+    # reached 40/40 catches (all new species) in greedy eval and CATCH's
+    # Q-value sitting at or above fighting's. Budget dropped back down
+    # from 200000 to 50000 accordingly -- per the actual root cause,
+    # this was never a volume problem, and this run is a scale-up
+    # confirmation of the 15k probe before any further increase.
     env = Monitor(PokemonRedWildBattleEnv(max_steps=30))
 
     model = DQN(
