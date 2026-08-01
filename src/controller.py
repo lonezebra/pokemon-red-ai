@@ -67,15 +67,36 @@ from core.controls import (
     wait_for_position_to_settle,
     attempt_run_from_wild_battle,
 )
-from core.memory import get_player_position, get_battle_state, get_move_cursor_slot, is_in_battle
+from core.memory import (
+    get_player_position,
+    get_battle_state,
+    get_move_cursor_slot,
+    is_in_battle,
+    has_item,
+    OAKS_PARCEL_ITEM_ID,
+)
+from core.pathfind import walk_to_map
 from agents.skills import QTableSkill, RivalBattleSkill
 from actions import get_action_name
 from core.config import PROJECT_ROOT
 from rewards.leave_house_rewards import PALLET_TOWN_MAP_ID
 from rewards.route1_rewards import VIRIDIAN_CITY_MAP_ID
-from create_starter_obtained_state import walk_to_oak_trigger, wait_for_lab_arrival, choose_starter
+from rewards.route2_rewards import ROUTE_2_MAP_ID, VIRIDIAN_FOREST_GATE_MAP_ID
+from create_starter_obtained_state import (
+    walk_to_oak_trigger,
+    wait_for_lab_arrival,
+    choose_starter,
+    wait_for_control_and_walk,
+)
 from create_rival_battle_state import walk_to_rival_trigger_and_battle
 from create_route1_entry_state import walk_out_of_lab_and_up_to_route_1, ROUTE_1_MAP_ID
+from create_pokedex_obtained_state import (
+    collect_parcel,
+    deliver_parcel,
+    VIRIDIAN_MART_MAP_ID,
+    OAKS_LAB_MAP_ID,
+    CUTSCENE_PRESSES,
+)
 
 
 def run_leave_house_segment(pyboy, max_steps=200):
@@ -239,6 +260,112 @@ def run_route1_navigation_segment(pyboy, max_steps=150):
     return True
 
 
+def run_oaks_parcel_segment(pyboy):
+    """
+    Viridian City -> Mart (collect the Parcel) -> back through Route 1 ->
+    Pallet Town -> Oak's Lab (deliver it) -> Pokedex scene -> Viridian
+    City. Reuses create_pokedex_obtained_state.py's own functions
+    directly rather than re-scripting the same errand -- see that
+    file's module docstring for why this errand exists at all: Viridian's
+    north exit (the only way to Route 2, the forest, and Pewter City)
+    stays shut until it's done.
+    """
+    print()
+    print("Segment 6: Oak's Parcel errand -> Pokedex obtained")
+    print("-" * 62)
+
+    print("Heading into the Viridian Mart...")
+    if not walk_to_map(pyboy, VIRIDIAN_MART_MAP_ID):
+        print("Warning: could not find the Mart door.")
+        return False
+
+    print("Collecting Oak's Parcel...")
+    if not collect_parcel(pyboy):
+        print("Warning: the Parcel never arrived in the bag.")
+        return False
+    print("Got Oak's Parcel.")
+
+    wait_for_control_and_walk(pyboy, "down")
+    if get_player_position(pyboy)["map_id"] == VIRIDIAN_MART_MAP_ID:
+        walk_to_map(pyboy, VIRIDIAN_CITY_MAP_ID)
+
+    print("Walking back to Oak's Lab...")
+    for map_id, label in (
+        (ROUTE_1_MAP_ID, "Route 1"),
+        (PALLET_TOWN_MAP_ID, "Pallet Town"),
+        (OAKS_LAB_MAP_ID, "Oak's Lab"),
+    ):
+        if not walk_to_map(pyboy, map_id):
+            print(f"Warning: could not reach {label}.")
+            return False
+
+    print("Delivering the Parcel to Oak...")
+    if not deliver_parcel(pyboy):
+        print("Warning: Oak never took the Parcel.")
+        return False
+    print("Parcel delivered.")
+
+    for _ in range(CUTSCENE_PRESSES):
+        press_button(pyboy, "a", hold_frames=10, release_frames=20)
+    wait_for_control_and_walk(pyboy, "down")
+
+    print("Walking back to Viridian City...")
+    # Still inside Oak's Lab after the cutscene -- walk_to_map only ever
+    # crosses one bordering map at a time (see its own docstring), so
+    # Pallet Town has to be the first leg here, not Route 1 directly.
+    for map_id, label in (
+        (PALLET_TOWN_MAP_ID, "Pallet Town"),
+        (ROUTE_1_MAP_ID, "Route 1"),
+        (VIRIDIAN_CITY_MAP_ID, "Viridian City"),
+    ):
+        if not walk_to_map(pyboy, map_id):
+            print(f"Warning: could not reach {label}.")
+            return False
+
+    print(f"Pokedex obtained, back at {get_player_position(pyboy)}.")
+    return True
+
+
+def run_route2_entry_segment(pyboy):
+    print()
+    print("Segment 7: Viridian City -> Route 2's southern entrance")
+    print("-" * 62)
+
+    if not walk_to_map(pyboy, ROUTE_2_MAP_ID):
+        print("Warning: could not reach Route 2.")
+        return False
+
+    print(f"Reached Route 2 (map {ROUTE_2_MAP_ID}) at {get_player_position(pyboy)}.")
+    return True
+
+
+def run_route2_navigation_segment(pyboy, max_steps=800):
+    print()
+    print("Segment 8: Route 2 Q-agent -> Viridian Forest gate")
+    print("-" * 62)
+
+    skill = QTableSkill(PROJECT_ROOT / "models" / "route2_q_table.json")
+
+    for _ in range(max_steps):
+        pos = get_player_position(pyboy)
+        if pos["map_id"] == VIRIDIAN_FOREST_GATE_MAP_ID:
+            break
+
+        action = skill.choose_action(pos)
+        walk_tile(pyboy, get_action_name(action), verbose=False)
+        run_frames(pyboy, 10)
+
+        if is_in_battle(pyboy):
+            attempt_run_from_wild_battle(pyboy)
+
+    if get_player_position(pyboy)["map_id"] != VIRIDIAN_FOREST_GATE_MAP_ID:
+        print("Did not reach the Viridian Forest gate within the step limit.")
+        return False
+
+    print(f"Reached the Viridian Forest gate at {get_player_position(pyboy)}.")
+    return True
+
+
 def main():
     print("Pokemon Red AI -- controller (one continuous run)")
 
@@ -251,6 +378,9 @@ def main():
     battle_ok = run_rival_battle_segment(pyboy) if starter_ok else False
     route1_entry_ok = run_route1_entry_segment(pyboy) if battle_ok else False
     route1_nav_ok = run_route1_navigation_segment(pyboy) if route1_entry_ok else False
+    parcel_ok = run_oaks_parcel_segment(pyboy) if route1_nav_ok else False
+    route2_entry_ok = run_route2_entry_segment(pyboy) if parcel_ok else False
+    route2_nav_ok = run_route2_navigation_segment(pyboy) if route2_entry_ok else False
 
     pyboy.stop()
 
@@ -262,6 +392,9 @@ def main():
     print(f"Rival-battle segment:   {'OK' if battle_ok else 'FAILED'}")
     print(f"Route 1 entry segment:  {'OK' if route1_entry_ok else 'FAILED'}")
     print(f"Route 1 nav segment:    {'OK' if route1_nav_ok else 'FAILED'}")
+    print(f"Oak's Parcel segment:   {'OK' if parcel_ok else 'FAILED'}")
+    print(f"Route 2 entry segment:  {'OK' if route2_entry_ok else 'FAILED'}")
+    print(f"Route 2 nav segment:    {'OK' if route2_nav_ok else 'FAILED'}")
 
 
 if __name__ == "__main__":
