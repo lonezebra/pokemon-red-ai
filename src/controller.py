@@ -9,6 +9,12 @@ code or its own separate emulator instance.
                    -> [scripted route]          -> rival's trigger
                    -> [rival-battle DQN]        -> win/loss
                    -> [scripted route]          -> Route 1's entrance
+                   -> [Route 1 Q-agent]         -> Viridian City
+
+Further segments (Route 2, the forest, Pewter Gym, Route 3, ...) are
+added the same way, one at a time, each verified before the next is
+built on top of it -- see the project README's roadmap for what each of
+those still needs.
 
 Each learned skill (leave-house Q-agent, rival-battle DQN) is called
 through agents.skills' choose_action(observation) -> action interface, so
@@ -54,12 +60,19 @@ import numpy as np
 
 from core.emulator import create_emulator, run_frames
 from core.state import load_state, BEDROOM_STATE_PATH
-from core.controls import walk_tile, press_button, advance_battle_dialogue, wait_for_position_to_settle
-from core.memory import get_player_position, get_battle_state, get_move_cursor_slot
-from agents.skills import LeaveHouseSkill, RivalBattleSkill
+from core.controls import (
+    walk_tile,
+    press_button,
+    advance_battle_dialogue,
+    wait_for_position_to_settle,
+    attempt_run_from_wild_battle,
+)
+from core.memory import get_player_position, get_battle_state, get_move_cursor_slot, is_in_battle
+from agents.skills import QTableSkill, RivalBattleSkill
 from actions import get_action_name
 from core.config import PROJECT_ROOT
 from rewards.leave_house_rewards import PALLET_TOWN_MAP_ID
+from rewards.route1_rewards import VIRIDIAN_CITY_MAP_ID
 from create_starter_obtained_state import walk_to_oak_trigger, wait_for_lab_arrival, choose_starter
 from create_rival_battle_state import walk_to_rival_trigger_and_battle
 from create_route1_entry_state import walk_out_of_lab_and_up_to_route_1, ROUTE_1_MAP_ID
@@ -70,7 +83,7 @@ def run_leave_house_segment(pyboy, max_steps=200):
     print("Segment 1: bedroom.state -> leave-house Q-agent -> Pallet Town")
     print("-" * 62)
 
-    skill = LeaveHouseSkill(PROJECT_ROOT / "models" / "leave_house_q_table.json")
+    skill = QTableSkill(PROJECT_ROOT / "models" / "leave_house_q_table.json")
 
     for step in range(max_steps):
         pos = get_player_position(pyboy)
@@ -195,6 +208,37 @@ def run_route1_entry_segment(pyboy):
     return True
 
 
+def run_route1_navigation_segment(pyboy, max_steps=150):
+    print()
+    print("Segment 5: Route 1 Q-agent -> Viridian City")
+    print("-" * 62)
+
+    skill = QTableSkill(PROJECT_ROOT / "models" / "route1_q_table.json")
+
+    for _ in range(max_steps):
+        pos = get_player_position(pyboy)
+        if pos["map_id"] == VIRIDIAN_CITY_MAP_ID:
+            break
+
+        action = skill.choose_action(pos)
+        walk_tile(pyboy, get_action_name(action), verbose=False)
+        run_frames(pyboy, 10)
+
+        # Route 1 is tall grass -- a step can trigger a wild encounter at
+        # any point. Fleeing it transparently here matches route1_env.py's
+        # own handling: navigation is the only thing this segment's skill
+        # was trained to solve, so battle interruptions never reach it.
+        if is_in_battle(pyboy):
+            attempt_run_from_wild_battle(pyboy)
+
+    if get_player_position(pyboy)["map_id"] != VIRIDIAN_CITY_MAP_ID:
+        print("Did not reach Viridian City within the step limit.")
+        return False
+
+    print(f"Reached Viridian City at {get_player_position(pyboy)}.")
+    return True
+
+
 def main():
     print("Pokemon Red AI -- controller (one continuous run)")
 
@@ -205,17 +249,19 @@ def main():
     leave_house_ok = run_leave_house_segment(pyboy)
     starter_ok = run_starter_segment(pyboy) if leave_house_ok else False
     battle_ok = run_rival_battle_segment(pyboy) if starter_ok else False
-    route1_ok = run_route1_entry_segment(pyboy) if battle_ok else False
+    route1_entry_ok = run_route1_entry_segment(pyboy) if battle_ok else False
+    route1_nav_ok = run_route1_navigation_segment(pyboy) if route1_entry_ok else False
 
     pyboy.stop()
 
     print()
     print("Summary")
     print("-" * 62)
-    print(f"Leave-house segment:  {'OK' if leave_house_ok else 'FAILED'}")
-    print(f"Starter segment:      {'OK' if starter_ok else 'FAILED'}")
-    print(f"Rival-battle segment: {'OK' if battle_ok else 'FAILED'}")
-    print(f"Route 1 entry segment: {'OK' if route1_ok else 'FAILED'}")
+    print(f"Leave-house segment:    {'OK' if leave_house_ok else 'FAILED'}")
+    print(f"Starter segment:        {'OK' if starter_ok else 'FAILED'}")
+    print(f"Rival-battle segment:   {'OK' if battle_ok else 'FAILED'}")
+    print(f"Route 1 entry segment:  {'OK' if route1_entry_ok else 'FAILED'}")
+    print(f"Route 1 nav segment:    {'OK' if route1_nav_ok else 'FAILED'}")
 
 
 if __name__ == "__main__":

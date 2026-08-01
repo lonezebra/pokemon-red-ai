@@ -15,8 +15,16 @@ from agents.q_learning_agent import QLearningAgent
 from actions import num_actions
 
 
-class LeaveHouseSkill:
-    """Wraps the trained leave-house Q-agent."""
+class QTableSkill:
+    """
+    Wraps any trained tabular Q-agent -- leave-house, Route 1/2/3, the
+    forest -- all of them are the same (map_id, x, y)-keyed lookup table
+    under QLearningAgent, differing only in which JSON file was trained.
+    Named for what it wraps rather than any one skill (it used to be
+    LeaveHouseSkill, back when that was the only tabular skill this
+    controller chained) now that the controller reuses it for every
+    navigation segment.
+    """
 
     def __init__(self, q_table_path):
         self.agent = QLearningAgent(num_actions=num_actions())
