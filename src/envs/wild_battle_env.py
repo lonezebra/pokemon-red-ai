@@ -45,23 +45,17 @@ class PokemonRedWildBattleEnv(gym.Env):
     That pool includes both full-HP captures and, per species, one
     already-weakened capture (create_weakened_wild_encounter_state.py,
     named species_<id>_weakened.state -- picked up automatically since
-    it still matches this glob, no separate wiring needed). This exists
-    because catching only pays off from a narrow "weakened but still
-    alive" window -- measured live at essentially a 100% success rate
-    for both species this project currently has states for -- but
-    average episode length under random exploration is only ~2.5 steps
-    (these opponents are weak enough that a single hit often goes
-    straight from mid-HP to zero), so *landing* in that window by
-    chance is rare regardless of how much total training runs. A
-    200,000-timestep retrain still valued a guaranteed-catch state at
-    ~3 out of a possible ~15, barely above a 50,000-step run's ~2.3 --
-    more of the same lever wasn't moving it. Starting roughly half of
-    episodes already in that window (the pool is presently 2 full-HP +
-    2 weakened, so a uniform random.choice lands there about 48% of the
-    time, confirmed live) gives the network many direct experiences of
-    "catch from here is great" instead of depending on exploration
-    luck -- the same fix already proven for the forest maze, applied
-    here to a battle instead of a corridor.
+    it still matches this glob, no separate wiring needed). These were
+    originally added on the theory that catching only pays off from a
+    narrow "weakened but still alive" window, reachable rarely enough by
+    chance (average random-exploration episode length ~2.5 steps) that
+    the network needed direct starts there to ever see it. That theory
+    turned out to be wrong -- a clean test (fresh env per attempt, so no
+    stale already-caught bookkeeping) found full-HP catch attempts
+    succeed just as reliably as weakened ones, 30/30. The weakened
+    states are harmless to keep (still valid encounters), but they
+    weren't the fix for what was actually going wrong -- see
+    species_already_caught below for the real cause.
 
     Action: 0-3 pick a move slot (same invalid-slot handling as the rival
     battle env: an unusable slot costs a small penalty instead of
@@ -101,23 +95,35 @@ class PokemonRedWildBattleEnv(gym.Env):
     env had exactly that -- would train the agent to try catching every
     single encounter forever, full party or not, duplicate or not,
     since nothing in the reward said otherwise. species_already_caught
-    tracks which species this *training run* has already caught (a
-    Python set on the env, not the game's own Pokedex flags: those are
-    indexed by National Dex number rather than this codebase's internal
-    species index throughout, and converting between them needs a full
-    ~190-entry lookup table that would be pure transcription risk to
-    hardcode from memory rather than something worth verifying here;
-    the real Pokedex also has no meaningful "already owned" answer to
-    give a fixed save-state reset every episode anyway, so an env-level
-    set is both simpler and the more correct answer to what training
-    actually needs). A new species catches at CATCH_REWARD; a species
-    already in the set catches at the much smaller CATCH_DUPLICATE_
-    REWARD, teaching the agent that catching is preferred only when it
-    grows the collection, not reflexively.
+    tracks which species this *episode's env instance* has already
+    caught (a Python set on the env, not the game's own Pokedex flags:
+    those are indexed by National Dex number rather than this
+    codebase's internal species index throughout, and converting
+    between them needs a full ~190-entry lookup table that would be
+    pure transcription risk to hardcode from memory rather than
+    something worth verifying here). A new species catches at
+    CATCH_REWARD; a species already in the set catches at the much
+    smaller CATCH_DUPLICATE_REWARD, teaching the agent that catching is
+    preferred only when it grows the collection, not reflexively.
 
-    Persists across reset() by design, not cleared per episode --
-    "already caught" is supposed to mean across the run, the same way
-    a real Pokedex does, not reset to empty every 30 steps.
+    Cleared on every reset(), not persisted across the whole training
+    run -- it was originally run-persistent, meant to echo a real
+    Pokedex's "owned" flag. That was a real bug, not a harmless
+    simplification: this project's wild-encounter pool currently has
+    only 2 distinct species, and a scripted random-policy run showed
+    both getting marked caught within 20 total env steps out of a
+    200,000-step training budget. Run-persistent tracking meant that
+    for over 99.99% of every training run so far, every successful
+    catch scored only CATCH_DUPLICATE_REWARD (2.0) -- genuinely less
+    than WIN_REWARD (10.0) -- so the network's resulting near-zero
+    value for the catch action wasn't a training failure, it was a
+    mathematically correct read of the incentive it was actually
+    given. Clearing per episode restores the intended "new species is
+    the good outcome" signal every episode instead of at most twice
+    ever; it stops being a meaningful approximation of a real Pokedex
+    either way once the encounter pool grows past a couple of species,
+    at which point revisit whether run-persistence is worth bringing
+    back.
 
     Left for later, deliberately not addressed here: judging whether a
     specific individual's stats are "good enough" to bother catching.
@@ -153,8 +159,8 @@ class PokemonRedWildBattleEnv(gym.Env):
         self.max_steps = max_steps
         self.randomize_stats = randomize_stats
         self.step_count = 0
-        # Across the whole training run, not per-episode -- see the
-        # class docstring for why this isn't cleared in reset().
+        # Cleared every reset() -- see the class docstring for why this
+        # is per-episode rather than run-persistent.
         self.species_already_caught = set()
 
         self.encounter_paths = sorted(WILD_ENCOUNTER_STATE_DIR.glob("species_*.state"))
@@ -180,6 +186,7 @@ class PokemonRedWildBattleEnv(gym.Env):
         set_bag_item_quantity(self.pyboy, POKE_BALL_ITEM_ID, POKEBALLS_PER_EPISODE)
 
         self.step_count = 0
+        self.species_already_caught = set()
 
         state = get_detailed_battle_state(self.pyboy)
         return self._observation(state), {}
