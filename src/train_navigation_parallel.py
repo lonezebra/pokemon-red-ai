@@ -3,6 +3,7 @@ import math
 import os
 import random
 import signal
+import time
 import multiprocessing as mp
 
 from agents.q_learning_agent import QLearningAgent
@@ -88,6 +89,18 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 DEFAULT_MAX_ROUNDS = 500  # a generous cap, not an expected stopping point
+
+# How often to print an in-round progress line while waiting for a round
+# to finish. A round used to be silent from its start until every worker
+# finished -- fine when rounds took a couple minutes, but this project's
+# bigger maps (Route 3's real region is 3.5x the tile count of what it
+# replaced) can run rounds long enough that "is this actually still
+# running?" becomes a real question with nothing on screen to answer it.
+# 15 minutes sits in the middle of "often enough to reassure, rarely
+# enough to not spam the log."
+STATUS_INTERVAL_SECONDS = int(
+    os.environ.get("POKEMON_RED_STATUS_INTERVAL_SECONDS") or 900
+)
 
 WARM_START_EPSILON = 0.3
 EPSILON_MIN = 0.05
@@ -485,7 +498,30 @@ def train(
         ]
         for process in processes:
             process.start()
+        round_start = time.monotonic()
+        last_status = round_start
         try:
+            while any(process.is_alive() for process in processes):
+                time.sleep(1)
+                now = time.monotonic()
+                if now - last_status >= STATUS_INTERVAL_SECONDS:
+                    last_status = now
+                    claimed = episodes_per_round - remaining.value
+                    pct = 100.0 * claimed / episodes_per_round if episodes_per_round else 100.0
+                    elapsed_min = (now - round_start) / 60.0
+                    # Straight-line projection from the claim rate so far --
+                    # crude (early claims include process startup, and the
+                    # rate isn't perfectly constant), but good enough to
+                    # answer "is it worth switching to high priority now or
+                    # waiting", which is the only thing this estimate is for.
+                    eta = (
+                        f", ~{elapsed_min * (100.0 / pct - 1):.0f} min left in this round"
+                        if claimed else ""
+                    )
+                    print(
+                        f"  round {round_num} in progress: {claimed}/{episodes_per_round} "
+                        f"episodes claimed ({pct:.0f}%), {elapsed_min:.0f} min elapsed{eta}"
+                    )
             for process in processes:
                 process.join()
         except KeyboardInterrupt:
