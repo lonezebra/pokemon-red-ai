@@ -4,46 +4,50 @@ from collections import deque
 from core.config import SCREENSHOT_DIR
 
 ROUTE_3_MAP_ID = 14
+MT_MOON_MAP_ID = 15
 ROUTE_3_META_PATH = SCREENSHOT_DIR / "route3_map_meta.json"
 
-# The deepest point an exhaustive parallel survey could reach (its
-# frontier fully exhausted -- 125/125 tiles, 0 new in the final round),
-# not an exit: every recorded exit from Route 3 leads back to Pewter, and
-# the only way further east is blocked by what looks like a Cut tree /
-# boulder line this project has no way to clear yet (no HM01, which
-# normally requires either an Oak's Aide reward or reaching the S.S.
-# Anne -- both well beyond where the project currently stands). Reusing
-# this survey's graph rather than re-deriving it live is deliberate, the
-# same reasoning as the forest env: some of this route's edges are not
-# plain 1-tile steps (see below), so a geometry-based guess would get
-# several of them wrong.
+# GOAL_TILE used to be (22, 10), the deepest point an "exhaustive" survey
+# could reach, on the theory (wrong, see below) that Mt. Moon was blocked
+# by something this project had no way past yet. It wasn't -- that
+# survey had a real blind spot, and the true exit is here: five tiles
+# at (57-61, 0), each one "up" away from Mt. Moon itself (map 15). Any
+# of them works identically; (59, 0) is just the middle one, picked the
+# same way the forest env picks a single representative tile for its
+# own goal.
+GOAL_TILE = (59, 0)
+
+# Why the first survey missed 300+ tiles and the real exit entirely:
+# Gen 1 trainers only ever battle you once. The survey (and every
+# automated re-check before this) always restored to a pre-battle
+# snapshot before testing each of a tile's four directions, so it could
+# only ever see the world as it looks with every nearby trainer still
+# undefeated -- some of whom sit directly in the way, sightline
+# triggering a battle-and-relocate the instant you approach, exactly
+# the "impossible edge" pattern already documented below. What it could
+# never see is what's past them *after* they're beaten: once defeated,
+# a trainer's sightline never triggers again, and walking through
+# resumes normally rather than intercepting into another fight.
 #
-# Found by forward BFS from the entrance (0, 9) over the same graph
-# _load_distances() below walks backward: (22, 10) is the unique tile at
-# the maximum distance, 30 hops.
-GOAL_TILE = (22, 10)
-
-
+# Found by a live playthrough of the exact button sequence past what
+# every automated check called a wall (a human, not the survey,
+# noticing the trainer "sees you, walks up, and battles" rather than
+# treating that as terrain) -- confirmed by hand-verifying identical
+# tiles with a fresh re-exploration where the local trainers were
+# already beaten: (11,6)/(14,6)/(19,6)'s recorded moves flip from
+# relocate-on-battle to a plain adjacent step once their trainer is no
+# longer undefeated. Those flips are honored here (the newer,
+# post-defeat edges win when the two surveys disagree) since a trained
+# policy will have beaten every trainer along its own path long before
+# needing to walk back through the same tile.
 def _load_distances():
     """
-    Shortest-path distance to GOAL_TILE for every Route 3 tile, using the
-    real walkable-adjacency graph a parallel survey recorded (edges:
-    ((x, y), direction) -> (x, y)) rather than one guessed from tile
-    geometry -- see rewards/forest_rewards.py for why that distinction
-    matters in general.
-
-    It matters especially here: several of this route's trainers have a
-    long sightline and relocate the player to their own fixed approach
-    tile on a win, which can be many tiles from wherever the fight
-    actually triggered -- e.g. (14,9) pressing "down" resolves a battle
-    and lands back on (14,9) itself, and (11,6) resolves one and lands
-    near (10,4)/(12,4)/(11,5) depending on which direction triggered it.
-    Confirmed live, not guessed: reproduced several of these exactly by
-    replaying the same battle handler the survey used. None of that
-    breaks the graph as a graph -- every edge is still a real,
-    deterministic, winnable transition -- it just means "distance" here
-    is graph hops, not tile-geometry distance, exactly the ledge case
-    the forest reward already handles the same way.
+    Shortest-path distance to GOAL_TILE for every Route 3 tile, using
+    the real walkable-adjacency graph two merged surveys recorded
+    (edges: ((x, y), direction) -> (x, y)) -- see the module docstring
+    above for why a geometry-based guess would get this map especially
+    wrong, on top of the reasons the forest env's own graph-based
+    shaping already covers (ledges, long trainer-relocation jumps).
 
     Standard reverse BFS: walks the graph backward from the goal along
     every edge's reverse, so a node reached after N reversed hops is
@@ -73,16 +77,15 @@ def _load_distances():
 def _load_trainer_trigger_tiles():
     """
     Tiles whose recorded edges include at least one non-adjacent jump --
-    the signature of a trainer battle relocating the player rather than a
-    plain step (see _load_distances' docstring). These are exactly the
+    the signature of a trainer battle relocating the player rather than
+    a plain step (see the module docstring). These are exactly the
     tiles worth paying _try_engage_trainer's probe cost from, the same
     role forest_env.py's KNOWN_TRAINER_TILES plays there, just derived
     from this survey's own graph instead of separate per-trainer capture
-    files (Route 3's survey never captured those individually). Being
-    over-inclusive here is harmless -- a small number of these are
-    probably genuine one-way ledges rather than trainers, and probing a
-    ledge tile just costs one wasted button-press attempt, not a
-    correctness bug.
+    files. Being over-inclusive here is harmless -- a small number of
+    these are probably genuine one-way ledges rather than trainers, and
+    probing a ledge tile just costs one wasted button-press attempt, not
+    a correctness bug.
     """
     with open(ROUTE_3_META_PATH) as f:
         meta = json.load(f)
@@ -112,12 +115,18 @@ def route3_potential(position):
     Higher = closer to the goal. Same potential-based-shaping pattern as
     the forest env -- distance here is graph shortest-path rather than a
     raw -y coordinate, for the same reason: this route is not a straight
-    corridor, on top of which several edges are not plain 1-tile steps.
+    corridor, on top of which several edges are the trainer-relocation
+    jumps documented above.
 
-    Anywhere off Route 3 (the 4 known exits back to Pewter) gets the
-    worst-case anchor, the same idea as every other navigation env's
-    off-route case.
+    Mt. Moon itself gets potential 0, matching GOAL_TILE's own distance
+    -- continuity across the boundary, so stepping through the exit is
+    never scored as a large penalty relative to standing right next to
+    it. Anywhere else off Route 3 (the 4 known exits back to Pewter)
+    gets the worst-case anchor, the same idea as every other navigation
+    env's off-route case.
     """
+    if position["map_id"] == MT_MOON_MAP_ID:
+        return 0
     if position["map_id"] != ROUTE_3_MAP_ID:
         return -_MAX_DISTANCE
 
@@ -130,14 +139,9 @@ def calculate_route3_reward(before, after):
     Same shape as the forest reward: a small step cost, a bigger cost for
     not moving at all, potential-based shaping toward the goal, a large
     terminal reward for reaching it, and a penalty for leaving Route 3
-    anywhere else -- which also covers losing a forced trainer battle,
+    any other way -- which also covers losing a forced trainer battle,
     since a blackout lands the player on Pewter's Pokemon Center map, not
-    Route 3.
-
-    Unlike the forest (whose goal is stepping through an exit onto a
-    different map), reaching GOAL_TILE here is a same-map event -- there
-    is no further map to cross into, since it is the deepest point this
-    project can currently reach, not a real exit.
+    Route 3 or Mt. Moon.
     """
     reward = -0.01
 
@@ -146,11 +150,7 @@ def calculate_route3_reward(before, after):
 
     reward += route3_potential(after) - route3_potential(before)
 
-    reached_goal = (
-        after["map_id"] == ROUTE_3_MAP_ID
-        and (after["x"], after["y"]) == GOAL_TILE
-    )
-    if reached_goal:
+    if after["map_id"] == MT_MOON_MAP_ID:
         reward += 100.0
     elif after["map_id"] != ROUTE_3_MAP_ID:
         reward -= 20.0

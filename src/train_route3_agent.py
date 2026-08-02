@@ -15,13 +15,14 @@ from train_navigation_parallel import train  # noqa: E402
 MODEL_PATH = PROJECT_ROOT / "models" / "route3_q_table.json"
 STATE_PATH = PROJECT_ROOT / "models" / "route3_parallel_state.json"
 
-# GOAL_TILE is 30 hops from the entrance by shortest path (see
-# rewards/route3_rewards.py) -- shorter than the forest's 127, but not a
-# corridor and not without forced fights, so this sits between Route
-# 1/2's 600-800 and the forest's 2000: generous headroom over the
-# shortest path plus however many trainer fights an exploring policy
-# triggers along the way, without letting a failed episode run away
-# entirely.
+# GOAL_TILE is 84 hops from the entrance by shortest path (see
+# rewards/route3_rewards.py) -- the real Mt. Moon exit, not the
+# placeholder dead-end tile an incomplete survey previously targeted.
+# Shorter than the forest's 127, but not a corridor and not without
+# forced fights, so this sits between Route 1/2's 600-800 and the
+# forest's 2000: generous headroom over the shortest path plus however
+# many trainer fights an exploring policy triggers along the way,
+# without letting a failed episode run away entirely.
 MAX_STEPS = 1000
 
 

@@ -12,7 +12,7 @@ from rewards.route3_rewards import (
     calculate_route3_reward,
     position_key,
     ROUTE_3_MAP_ID,
-    GOAL_TILE,
+    MT_MOON_MAP_ID,
     KNOWN_TRAINER_TILES,
     _DISTANCES,
 )
@@ -23,11 +23,19 @@ TRAINER_MODEL_PATH = PROJECT_ROOT / "models" / "trainer_battle_dqn.zip"
 
 class PokemonRedRoute3Env:
     """
-    Navigation across Route 3's currently-reachable region, toward
-    GOAL_TILE -- see rewards/route3_rewards.py for why that is the
-    deepest surveyed point rather than a real exit: Mt. Moon itself is
-    still blocked (a Cut tree / boulder line this project has no way
-    past yet), and an exhaustive survey confirmed no other way through.
+    Navigation across Route 3 toward its real exit: Mt. Moon (map 15).
+
+    An earlier version of this env targeted a placeholder GOAL_TILE
+    (22, 10), the deepest point a survey that turned out not to be
+    exhaustive could reach, believing Mt. Moon was blocked by something
+    this project had no way past yet. It wasn't -- see
+    rewards/route3_rewards.py's module docstring for the real reason
+    over 300 tiles (including the true exit) went undiscovered: Gen 1
+    trainers only battle once, and the survey always re-tested each
+    direction from a pre-battle snapshot, so it could never see what
+    opens up once a blocking trainer is actually beaten. A human
+    playthrough of the exact button sequence past the old "wall" is
+    what found the real path.
 
     Structurally this is forest_env.py's pattern, not route1/route2's:
     Route 3 has forced trainer battles along the way (Gen 1 doesn't
@@ -133,11 +141,8 @@ class PokemonRedRoute3Env:
         self._note_depth(after)
         self.step_count += 1
 
-        reached_goal = (
-            after["map_id"] == ROUTE_3_MAP_ID
-            and (after["x"], after["y"]) == GOAL_TILE
-        )
-        left_route_3 = after["map_id"] != ROUTE_3_MAP_ID
+        reached_goal = after["map_id"] == MT_MOON_MAP_ID
+        left_route_3 = after["map_id"] not in (ROUTE_3_MAP_ID, MT_MOON_MAP_ID)
         ran_out_of_steps = self.step_count >= self.max_steps
 
         done = reached_goal or left_route_3 or ran_out_of_steps
