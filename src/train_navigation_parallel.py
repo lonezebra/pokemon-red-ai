@@ -5,6 +5,8 @@ import random
 import signal
 import time
 import multiprocessing as mp
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from agents.q_learning_agent import QLearningAgent
 from actions import num_actions
@@ -101,6 +103,20 @@ DEFAULT_MAX_ROUNDS = 500  # a generous cap, not an expected stopping point
 STATUS_INTERVAL_SECONDS = int(
     os.environ.get("POKEMON_RED_STATUS_INTERVAL_SECONDS") or 900
 )
+
+# Pacific rather than the container's own (usually UTC) clock: this
+# project's training runs live on the user's own Mac, so the
+# stamp printed alongside progress should read in the timezone
+# they're actually checking it from, not wherever this process happens
+# to execute. A named zone (not a fixed UTC-8 offset) so it reads PDT
+# or PST correctly across the DST switch instead of silently being an
+# hour off half the year.
+PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
+
+
+def _pacific_timestamp():
+    return datetime.now(PACIFIC_TZ).strftime("%Y-%m-%d %I:%M:%S %p %Z")
+
 
 WARM_START_EPSILON = 0.3
 EPSILON_MIN = 0.05
@@ -467,8 +483,9 @@ def train(
     mark_decision_for_workers(yielding)
     tier_note = " (yielding the top core tier to you)" if yielding else ""
     print(
-        f"{num_workers} workers, {episodes_per_round} episodes per round.{tier_note} "
-        f"Ctrl-C finishes the current round and saves it before exiting."
+        f"[{_pacific_timestamp()}] {num_workers} workers, {episodes_per_round} "
+        f"episodes per round.{tier_note} Ctrl-C finishes the current round and "
+        f"saves it before exiting."
     )
 
     for round_num in range(start_round, max_rounds + 1):
@@ -519,8 +536,9 @@ def train(
                         if claimed else ""
                     )
                     print(
-                        f"  round {round_num} in progress: {claimed}/{episodes_per_round} "
-                        f"episodes claimed ({pct:.0f}%), {elapsed_min:.0f} min elapsed{eta}"
+                        f"[{_pacific_timestamp()}] round {round_num} in progress: "
+                        f"{claimed}/{episodes_per_round} episodes claimed ({pct:.0f}%), "
+                        f"{elapsed_min:.0f} min elapsed{eta}"
                     )
             for process in processes:
                 process.join()
@@ -572,8 +590,8 @@ def train(
             else ""
         )
         print(
-            f"Round {round_num:3d}  total_episodes={total_episodes}  epsilon={epsilon:.3f}  "
-            f"successes this round: {round_successes}/{round_episodes}  "
+            f"[{_pacific_timestamp()}] Round {round_num:3d}  total_episodes={total_episodes}  "
+            f"epsilon={epsilon:.3f}  successes this round: {round_successes}/{round_episodes}  "
             f"cumulative: {successes}/{total_episodes}{spread}"
         )
 
