@@ -5,7 +5,7 @@ import random
 import signal
 import time
 import multiprocessing as mp
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from agents.q_learning_agent import QLearningAgent
@@ -90,7 +90,11 @@ DEFAULT_EPISODES_PER_ROUND = int(
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
-DEFAULT_MAX_ROUNDS = 500  # a generous cap, not an expected stopping point
+DEFAULT_MAX_ROUNDS = int(
+    os.environ.get("POKEMON_RED_MAX_ROUNDS") or 500
+)  # a generous cap, not an expected stopping point -- POKEMON_RED_STOP_BY
+# is the better tool for "stop by a specific time", see below; this is
+# for the simpler "just don't run more than N rounds regardless" case.
 
 # How often to print an in-round progress line while waiting for a round
 # to finish. A round used to be silent from its start until every worker
@@ -116,6 +120,45 @@ PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 def _pacific_timestamp():
     return datetime.now(PACIFIC_TZ).strftime("%Y-%m-%d %I:%M:%S %p %Z")
+
+
+STOP_BY_ENV = "POKEMON_RED_STOP_BY"
+
+
+def _parse_stop_by(value, now=None):
+    """
+    "HH:MM" (24-hour, Pacific) -> a concrete datetime deadline, today's
+    date. If that clock time has already passed today, the deadline is
+    *now* -- there is no sensible "did they mean today or tomorrow"
+    guess to make silently, and stopping immediately is the safe
+    failure mode for a feature whose whole point is never training
+    past a hard stop.
+    """
+    now = now or datetime.now(PACIFIC_TZ)
+    hour, minute = (int(part) for part in value.split(":"))
+    deadline = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return deadline if deadline > now else now
+
+
+def _round_time_estimate(duration_count, duration_total, duration_max):
+    """
+    A deliberately pessimistic guess at how long the *next* round might
+    take, from whatever rounds have actually been timed so far this run
+    (across resumes -- see save_progress). Average alone underestimates
+    the risk: one straggler episode -- deep in trainer fights, close to
+    max_steps -- can make a single round run 2-3x longer than a typical
+    one (observed live: a round that should have taken well under an
+    hour took over 3), and that is exactly the round that would blow
+    through a deadline if this only planned for the typical case.
+    Taking the larger of "the worst round seen" and "1.5x the average"
+    means a single unlucky round immediately raises the bar for every
+    estimate after it, rather than being smoothed away by the ones
+    before it.
+    """
+    if duration_count == 0:
+        return None
+    average = duration_total / duration_count
+    return max(duration_max, average * 1.5)
 
 
 WARM_START_EPSILON = 0.3
@@ -400,7 +443,10 @@ def merge_tables(worker_table_paths, output_path):
     write_json_atomic(output_path, merged)
 
 
-def save_progress(state_path, round_num, epsilon, total_episodes, successes, best_demo_key):
+def save_progress(
+    state_path, round_num, epsilon, total_episodes, successes, best_demo_key,
+    duration_count=0, duration_total=0.0, duration_max=0.0,
+):
     # Atomic, and written last in a round on purpose: this is the file
     # tools/checkpoint_artifacts.sh watches to decide a round finished, so
     # it must never appear complete while the Q-table beside it isn't.
@@ -412,6 +458,13 @@ def save_progress(state_path, round_num, epsilon, total_episodes, successes, bes
             "total_episodes": total_episodes,
             "successes": successes,
             "best_demo_key": list(best_demo_key) if best_demo_key is not None else None,
+            # Timed rounds only -- carried across resumes, so a
+            # POKEMON_RED_STOP_BY deadline has real data to plan against
+            # from the very first round of a fresh session, not just
+            # after this particular process has run a round itself.
+            "duration_count": duration_count,
+            "duration_total": duration_total,
+            "duration_max": duration_max,
         },
     )
 
@@ -425,6 +478,13 @@ def load_progress(state_path):
 
     if data["best_demo_key"] is not None:
         data["best_demo_key"] = tuple(data["best_demo_key"])
+
+    # Absent in state files saved before round-timing existed -- treat
+    # as "no rounds timed yet" rather than failing to resume a run over
+    # a field that didn't used to exist.
+    data.setdefault("duration_count", 0)
+    data.setdefault("duration_total", 0.0)
+    data.setdefault("duration_max", 0.0)
 
     return data
 
@@ -443,14 +503,17 @@ def initial_state(state_path, model_path):
             progress["total_episodes"],
             progress["successes"],
             progress["best_demo_key"],
+            progress["duration_count"],
+            progress["duration_total"],
+            progress["duration_max"],
         )
 
     if model_path.exists():
         print(f"Warm-starting from existing Q-table, epsilon={WARM_START_EPSILON:.3f}")
-        return 1, WARM_START_EPSILON, 0, 0, None
+        return 1, WARM_START_EPSILON, 0, 0, None, 0, 0.0, 0.0
 
     print("Starting from scratch")
-    return 1, 1.0, 0, 0, None
+    return 1, 1.0, 0, 0, None, 0, 0.0, 0.0
 
 
 def train(
@@ -468,9 +531,24 @@ def train(
     worker_dir = WORKER_DIR / gif_prefix
     worker_dir.mkdir(parents=True, exist_ok=True)
 
-    start_round, epsilon, total_episodes, successes, best_demo_key = initial_state(
-        state_path, model_path
-    )
+    (
+        start_round, epsilon, total_episodes, successes, best_demo_key,
+        duration_count, duration_total, duration_max,
+    ) = initial_state(state_path, model_path)
+
+    # A recommendation floor, not a round count: "give me 400 rounds" is
+    # a guess at how much training is needed, but the actual constraint
+    # is usually a wall-clock one ("I need my laptop back at 3") that a
+    # round count can't express -- 250 rounds is only "enough time" if
+    # every round happens to run fast. POKEMON_RED_STOP_BY="15:00" (24h,
+    # Pacific) states the real constraint directly: stop with time to
+    # spare rather than mid-round at the deadline, using whatever
+    # rounds have actually been timed (carried across resumes) to
+    # decide, before starting each one, whether there's likely room for
+    # another -- see _round_time_estimate for why that's deliberately
+    # pessimistic rather than a plain average.
+    stop_by = os.environ.get(STOP_BY_ENV)
+    deadline = _parse_stop_by(stop_by) if stop_by else None
 
     signal.signal(signal.SIGINT, _request_graceful_stop)
 
@@ -482,13 +560,36 @@ def train(
     yielding = decide_yield(num_workers)
     mark_decision_for_workers(yielding)
     tier_note = " (yielding the top core tier to you)" if yielding else ""
+    deadline_note = f" Stopping by {deadline.strftime('%I:%M %p %Z')}." if deadline else ""
     print(
         f"[{_pacific_timestamp()}] {num_workers} workers, {episodes_per_round} "
         f"episodes per round.{tier_note} Ctrl-C finishes the current round and "
-        f"saves it before exiting."
+        f"saves it before exiting.{deadline_note}"
     )
 
     for round_num in range(start_round, max_rounds + 1):
+        if deadline is not None:
+            now = datetime.now(PACIFIC_TZ)
+            if now >= deadline:
+                print(
+                    f"[{_pacific_timestamp()}] Deadline reached before round "
+                    f"{round_num} started -- stopping here. Last saved round "
+                    f"is unaffected."
+                )
+                return
+            estimate = _round_time_estimate(duration_count, duration_total, duration_max)
+            if estimate is not None and now + timedelta(seconds=estimate) > deadline:
+                minutes_left = (deadline - now).total_seconds() / 60.0
+                print(
+                    f"[{_pacific_timestamp()}] Round {round_num} would likely "
+                    f"take ~{estimate / 60.0:.0f} min (worst-case estimate from "
+                    f"{duration_count} timed round(s)), but only {minutes_left:.0f} "
+                    f"min remain before the {deadline.strftime('%I:%M %p %Z')} "
+                    f"deadline -- stopping here rather than risk not finishing. "
+                    f"Last saved round is unaffected."
+                )
+                return
+
         table_paths = [worker_dir / f"worker{i}.json" for i in range(num_workers)]
         summary_paths = [worker_dir / f"worker{i}_summary.json" for i in range(num_workers)]
 
@@ -521,6 +622,18 @@ def train(
             while any(process.is_alive() for process in processes):
                 time.sleep(1)
                 now = time.monotonic()
+
+                if (
+                    deadline is not None
+                    and not _STOP_REQUESTED
+                    and datetime.now(PACIFIC_TZ) >= deadline
+                ):
+                    print(
+                        f"[{_pacific_timestamp()}] Deadline reached mid-round -- "
+                        f"draining round {round_num} the same way Ctrl-C would."
+                    )
+                    _request_graceful_stop(None, None)
+
                 if now - last_status >= STATUS_INTERVAL_SECONDS:
                     last_status = now
                     claimed = episodes_per_round - remaining.value
@@ -577,6 +690,13 @@ def train(
                 process.join()
             return
 
+        # Timed regardless of how the round ended (full completion or a
+        # deadline/Ctrl-C drain): a drained round is typically short and
+        # would pull the average down in a way that looks like good
+        # news but isn't -- excluded below by only feeding rounds that
+        # ran their full episode budget into the estimate.
+        this_round_seconds = time.monotonic() - round_start
+
         merge_tables(table_paths, model_path)
 
         round_successes = 0
@@ -591,6 +711,16 @@ def train(
 
         successes += round_successes
         total_episodes += round_episodes
+
+        # Only a round that ran its full episode budget teaches the
+        # estimator anything about a *normal* round's length -- one
+        # drained early by a deadline or Ctrl-C is short by
+        # construction, and folding it in would quietly teach future
+        # estimates to expect rounds shorter than they really are.
+        if round_episodes >= episodes_per_round:
+            duration_count += 1
+            duration_total += this_round_seconds
+            duration_max = max(duration_max, this_round_seconds)
 
         # Each worker decays its own epsilon once per episode it ran, so
         # the round's effective decay is over the *average* worker's
@@ -646,7 +776,10 @@ def train(
                 save_gif(demo["frames"], f"{gif_prefix}_best_so_far.gif")
                 print(f"  [demo] new best so far (round {round_num})")
 
-        save_progress(state_path, round_num, epsilon, total_episodes, successes, best_demo_key)
+        save_progress(
+            state_path, round_num, epsilon, total_episodes, successes, best_demo_key,
+            duration_count, duration_total, duration_max,
+        )
 
         if _STOP_REQUESTED:
             print(
