@@ -526,6 +526,29 @@ def train(
                     claimed = episodes_per_round - remaining.value
                     pct = 100.0 * claimed / episodes_per_round if episodes_per_round else 100.0
                     elapsed_min = (now - round_start) / 60.0
+
+                    if claimed >= episodes_per_round:
+                        # Every episode has been *claimed*, not finished --
+                        # claim rate is no longer a meaningful signal, since
+                        # what's left is however long the slowest still-alive
+                        # worker's current episode takes, which could be
+                        # seconds or (a single unlucky, trainer-heavy,
+                        # near-max_steps episode) most of an hour. Dividing
+                        # by (100/pct - 1) here is a division by zero in
+                        # spirit even where it isn't literally one: it always
+                        # prints "~0 min left" at exactly the moment that
+                        # stops being true. Report what's actually known
+                        # instead of projecting past the point the
+                        # projection has any signal left.
+                        still_running = sum(1 for p in processes if p.is_alive())
+                        print(
+                            f"[{_pacific_timestamp()}] round {round_num}: all "
+                            f"{episodes_per_round} episodes claimed, waiting on "
+                            f"{still_running} worker(s) to finish their current "
+                            f"episode ({elapsed_min:.0f} min elapsed this round)"
+                        )
+                        continue
+
                     # Straight-line projection from the claim rate so far --
                     # crude (early claims include process startup, and the
                     # rate isn't perfectly constant), but good enough to
