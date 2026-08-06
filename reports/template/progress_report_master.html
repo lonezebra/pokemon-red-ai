@@ -1,0 +1,954 @@
+<title>Pokemon Red AI — Progress Report</title>
+<style>
+  @font-face {
+    font-family: "Press Start 2P";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url(__FONT_PS2P__) format("woff2");
+  }
+
+  :root {
+    /* DMG shell daylight theme */
+    --bg: #c9c5b6;              /* shell grey */
+    --bg-tex: rgba(0,0,0,0.03);
+    --panel: #dedbd0;
+    --panel-border: #8d8a7d;
+    --ink: #21231c;
+    --ink-soft: #4c4e42;
+    --ink-faint: #75776a;
+    --shadow: rgba(33,35,28,0.55);
+
+    /* the LCD never changes theme -- it's a screen */
+    --lcd-deep: #0f380f;
+    --lcd-dark: #306230;
+    --lcd-mid: #8bac0f;
+    --lcd-light: #9bbc0f;
+
+    --accent: #9c2c60;          /* A/B button magenta */
+    --accent-soft: #ecd3de;
+    --accent-line: #c98aa8;
+    --blue: #2d3494;            /* SELECT/START ink */
+    --good: #2f6b1f;
+    --good-soft: #d9e4c8;
+    --good-line: #9cb87c;
+    --warn: #8a5a12;
+    --warn-soft: #eee0c2;
+    --warn-line: #ceab6c;
+    --bad: #93321f;
+    --bad-soft: #ecd6cd;
+    --bad-line: #cf9c88;
+
+    --shell-hi: #b9b5a8;
+    --shell-lo: #999588;
+    --shell-edge: #6d6a5f;
+
+    --px: "Press Start 2P", ui-monospace, monospace;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+
+  :root[data-theme="dark"] {
+    /* backlit DMG in a dark room */
+    --bg: #0a120b;
+    --bg-tex: rgba(155,188,15,0.025);
+    --panel: #12200f;
+    --panel-border: #3c5a2a;
+    --ink: #d8ecb2;
+    --ink-soft: #a4bd85;
+    --ink-faint: #6d8455;
+    --shadow: rgba(0,0,0,0.7);
+
+    --accent: #e07ba6;
+    --accent-soft: #341423;
+    --accent-line: #7c3c58;
+    --blue: #9aa3f0;
+    --good: #a5d64f;
+    --good-soft: #1d2c10;
+    --good-line: #4c6a26;
+    --warn: #e0ab5c;
+    --warn-soft: #2c2413;
+    --warn-line: #6a5426;
+    --bad: #e08a75;
+    --bad-soft: #2c1712;
+    --bad-line: #6a3426;
+
+    --shell-hi: #33392f;
+    --shell-lo: #20241e;
+    --shell-edge: #10130e;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0a120b;
+      --bg-tex: rgba(155,188,15,0.025);
+      --panel: #12200f;
+      --panel-border: #3c5a2a;
+      --ink: #d8ecb2;
+      --ink-soft: #a4bd85;
+      --ink-faint: #6d8455;
+      --shadow: rgba(0,0,0,0.7);
+
+      --accent: #e07ba6;
+      --accent-soft: #341423;
+      --accent-line: #7c3c58;
+      --blue: #9aa3f0;
+      --good: #a5d64f;
+      --good-soft: #1d2c10;
+      --good-line: #4c6a26;
+      --warn: #e0ab5c;
+      --warn-soft: #2c2413;
+      --warn-line: #6a5426;
+      --bad: #e08a75;
+      --bad-soft: #2c1712;
+      --bad-line: #6a3426;
+
+      --shell-hi: #33392f;
+      --shell-lo: #20241e;
+      --shell-edge: #10130e;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(var(--bg-tex) 1px, transparent 1px),
+      var(--bg);
+    background-size: 5px 5px, auto;
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 48px 20px 96px;
+  }
+
+  @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+  @keyframes led-pulse { 0%, 100% { box-shadow: 0 0 6px 1px rgba(220,40,40,0.8); } 50% { box-shadow: 0 0 2px 0 rgba(220,40,40,0.5); } }
+  @media (prefers-reduced-motion: reduce) {
+    .lcd .menu .cursor::before, .dialog::after { animation: none !important; }
+    .led { animation: none !important; }
+  }
+
+  /* ---------- the Game Boy hero ---------- */
+  .gameboy {
+    background: linear-gradient(175deg, var(--shell-hi), var(--shell-lo));
+    border: 2px solid var(--shell-edge);
+    border-radius: 12px 12px 40px 12px;
+    padding: 22px 22px 18px;
+    box-shadow: 6px 6px 0 var(--shadow);
+    margin-bottom: 48px;
+  }
+
+  .bezel {
+    background: #494a4e;
+    border-radius: 8px 8px 26px 8px;
+    padding: 26px 34px 22px;
+    position: relative;
+  }
+  .bezel .stripes {
+    position: absolute;
+    top: 10px; left: 34px; right: 34px;
+    height: 3px;
+    background: linear-gradient(90deg, #7a2048 0 49.5%, transparent 49.5% 50.5%, #2d3494 50.5% 100%);
+  }
+  .bezel .btxt {
+    font-family: var(--px);
+    font-size: 7px;
+    color: #b9bdc9;
+    letter-spacing: 0.08em;
+    margin-top: 14px;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .led-wrap {
+    position: absolute;
+    left: 10px; top: 50%;
+    transform: translateY(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+  }
+  .led {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #e33b3b;
+    animation: led-pulse 2.4s ease-in-out infinite;
+  }
+  .led-wrap span {
+    font-family: var(--px);
+    font-size: 6px;
+    color: #9ba0ad;
+    writing-mode: vertical-rl;
+    letter-spacing: 0.1em;
+  }
+
+  .lcd {
+    background:
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(15,56,15,0.14) 2px 3px),
+      radial-gradient(rgba(15,56,15,0.12) 1px, transparent 1px),
+      linear-gradient(160deg, var(--lcd-light), var(--lcd-mid) 85%);
+    background-size: auto, 4px 4px, auto;
+    border: 3px solid var(--lcd-deep);
+    padding: 26px 24px 22px;
+    color: var(--lcd-deep);
+  }
+  .lcd .title {
+    font-family: var(--px);
+    font-size: clamp(17px, 3.4vw, 30px);
+    line-height: 1.5;
+    margin: 0 0 4px;
+    text-shadow: 2px 2px 0 rgba(15,56,15,0.22);
+  }
+  .lcd .subtitle {
+    font-family: var(--px);
+    font-size: clamp(8px, 1.4vw, 11px);
+    line-height: 1.8;
+    margin: 0 0 20px;
+    color: var(--lcd-dark);
+  }
+  .lcd .menu {
+    font-family: var(--px);
+    font-size: clamp(9px, 1.5vw, 12px);
+    line-height: 2.2;
+    list-style: none;
+    padding: 0; margin: 0;
+  }
+  .lcd .menu .cursor::before {
+    content: "\25B6";
+    margin-right: 10px;
+    animation: blink 1.1s steps(1) infinite;
+  }
+  .lcd .menu .dim { opacity: 0.45; padding-left: 26px; }
+
+  /* ---------- stat row ---------- */
+  header.hero { margin-bottom: 48px; }
+  .statbar {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 2px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--shadow);
+    padding: 14px 12px 12px;
+  }
+  .stat .n {
+    font-family: var(--px);
+    font-size: clamp(11px, 1.8vw, 15px);
+    line-height: 1.4;
+    color: var(--accent);
+  }
+  .stat .l {
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-top: 6px;
+    line-height: 1.4;
+  }
+  .standing {
+    font-size: 13.5px;
+    color: var(--ink-soft);
+    margin: 0;
+    border-left: 4px solid var(--accent);
+    padding-left: 12px;
+  }
+  .standing strong { color: var(--ink); }
+
+  /* ---------- sections ---------- */
+  section { margin-top: 56px; }
+  h2 {
+    font-family: var(--px);
+    font-size: 12px;
+    line-height: 1.7;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink);
+    margin: 0 0 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h2::before {
+    content: "";
+    width: 10px; height: 10px;
+    background: var(--accent);
+    box-shadow: 2px 2px 0 var(--shadow);
+    flex-shrink: 0;
+  }
+  h3 { font-size: 17px; margin: 0 0 8px; color: var(--ink); }
+  p { color: var(--ink-soft); margin: 0 0 12px; }
+  p:last-child { margin-bottom: 0; }
+  strong { color: var(--ink); font-weight: 650; }
+  em { color: var(--ink); }
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--good-soft);
+    color: var(--good);
+    padding: 0.1em 0.4em;
+    border: 1px solid var(--good-line);
+  }
+
+  /* ---------- Gen-1 dialog boxes ---------- */
+  .dialog {
+    background: var(--panel);
+    border: 2px solid var(--ink);
+    outline: 2px solid var(--ink);
+    outline-offset: 3px;
+    box-shadow: 5px 5px 0 var(--shadow);
+    padding: 18px 22px 20px;
+    margin: 22px 5px 8px;
+    position: relative;
+  }
+  .dialog + .dialog { margin-top: 28px; }
+  .dialog::after {
+    content: "\25BC";
+    position: absolute;
+    right: 12px; bottom: 6px;
+    font-size: 10px;
+    color: var(--accent);
+    animation: blink 1.2s steps(1) infinite;
+  }
+  .dialog .tag {
+    font-family: var(--px);
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    display: inline-block;
+    padding: 4px 8px;
+    border: 2px solid currentColor;
+  }
+  .dialog.bug .tag { color: var(--bad); background: var(--bad-soft); }
+  .dialog.find .tag { color: var(--warn); background: var(--warn-soft); }
+  .dialog.fix .tag { color: var(--good); background: var(--good-soft); }
+  .dialog.plain .tag { color: var(--blue); }
+
+  /* ---------- route pipeline ---------- */
+  .pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .tile {
+    flex: 1 1 150px;
+    border: 2px solid var(--ink);
+    background: var(--panel);
+    box-shadow: 4px 4px 0 var(--shadow);
+    padding: 13px 14px;
+  }
+  .tile .status {
+    font-family: var(--px);
+    font-size: 7px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: inline-block;
+    padding: 4px 7px;
+    margin-bottom: 10px;
+    border: 2px solid currentColor;
+  }
+  .tile.done .status { background: var(--good-soft); color: var(--good); }
+  .tile.active .status { background: var(--warn-soft); color: var(--warn); }
+  .tile.next .status { color: var(--ink-faint); border-style: dashed; }
+  .tile .name { font-weight: 650; font-size: 14px; margin-bottom: 3px; color: var(--ink); }
+  .tile .sub { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+  .tile.next { opacity: 0.62; }
+  .tile.active { border-color: var(--accent); box-shadow: 4px 4px 0 var(--accent); }
+  .arrow {
+    align-self: center;
+    color: var(--accent);
+    font-family: var(--px);
+    font-size: 11px;
+    padding: 0 1px;
+  }
+
+  /* ---------- gif gallery: little game boys ---------- */
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 18px;
+  }
+  .demo {
+    background: linear-gradient(175deg, var(--shell-hi), var(--shell-lo));
+    border: 2px solid var(--shell-edge);
+    border-radius: 8px 8px 22px 8px;
+    box-shadow: 5px 5px 0 var(--shadow);
+    padding: 12px 12px 10px;
+  }
+  .demo .screenwrap {
+    background: #494a4e;
+    border-radius: 5px 5px 14px 5px;
+    padding: 12px 14px 10px;
+  }
+  .demo img {
+    display: block;
+    width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+    border: 2px solid var(--lcd-deep);
+    background: var(--lcd-deep);
+  }
+  .demo .microtext {
+    font-family: var(--px);
+    font-size: 6px;
+    color: #9ba0ad;
+    letter-spacing: 0.08em;
+    margin-top: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .demo .microtext i {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: #e33b3b;
+    display: inline-block;
+  }
+  .demo .cap { padding: 10px 4px 2px; }
+  .demo .cap .t { font-family: var(--px); font-size: 9px; line-height: 1.7; color: var(--ink); }
+  .demo .cap .badge { color: var(--accent); }
+  .demo .cap .s { font-size: 12px; margin-top: 5px; line-height: 1.5; color: var(--ink-soft); }
+
+  /* ---------- map figure ---------- */
+  .mapfig {
+    border: 3px solid var(--lcd-deep);
+    background: var(--lcd-mid);
+    box-shadow: 5px 5px 0 var(--shadow);
+    margin: 22px 5px 8px;
+  }
+  .mapfig img {
+    display: block;
+    width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+  }
+  .mapfig .cap {
+    padding: 12px 16px;
+    font-size: 12.5px;
+    color: var(--lcd-deep);
+    background:
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(15,56,15,0.1) 2px 3px),
+      linear-gradient(160deg, var(--lcd-light), var(--lcd-mid));
+    border-top: 3px solid var(--lcd-deep);
+  }
+
+  /* ---------- milestones ---------- */
+  .milestones { display: grid; gap: 12px; }
+  .ms {
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+    border: 2px solid var(--ink);
+    background: var(--panel);
+    box-shadow: 4px 4px 0 var(--shadow);
+    padding: 13px 16px;
+  }
+  .ms .mark {
+    font-family: var(--px);
+    font-size: 7px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    padding: 4px 7px;
+    border: 2px solid currentColor;
+    flex-shrink: 0;
+  }
+  .ms .mark.learned { color: var(--good); background: var(--good-soft); }
+  .ms .mark.scaffold { color: var(--blue); }
+  .ms .mark.infra { color: var(--warn); background: var(--warn-soft); }
+  .ms .body { font-size: 13.5px; color: var(--ink-soft); }
+  .ms .body strong { color: var(--ink); }
+
+  /* ---------- timeline as save-file menu ---------- */
+  .timeline { display: grid; gap: 22px; }
+  .tlitem {
+    border: 2px solid var(--ink);
+    background: var(--panel);
+    box-shadow: 4px 4px 0 var(--shadow);
+    padding: 18px 20px;
+    position: relative;
+  }
+  .tlitem::before {
+    content: "SAVE";
+    font-family: var(--px);
+    font-size: 7px;
+    letter-spacing: 0.08em;
+    position: absolute;
+    top: -11px; left: 12px;
+    background: var(--ink);
+    color: var(--panel);
+    padding: 3px 8px;
+  }
+  .tlitem.warn::before { content: "ALERT"; background: var(--warn); }
+  .tlitem.resolved::before { content: "SAVE OK"; background: var(--good); }
+  .tlitem .when {
+    font-family: var(--px);
+    font-size: 8px;
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+    margin: 4px 0 8px;
+    line-height: 1.8;
+  }
+  .tlitem h3 { font-size: 16px; margin-bottom: 8px; }
+  .tlitem .metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 12px 0 0;
+  }
+  .tlitem .metrics span {
+    font-family: var(--px);
+    font-size: 7.5px;
+    line-height: 1.6;
+    background: var(--good-soft);
+    color: var(--good);
+    border: 2px solid var(--good-line);
+    padding: 4px 8px;
+  }
+  .tlitem.warn .metrics span { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-line); }
+
+  /* ---------- table with HP bars ---------- */
+  .tablewrap { overflow-x: auto; border: 2px solid var(--ink); box-shadow: 5px 5px 0 var(--shadow); background: var(--panel); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 660px; }
+  thead th {
+    text-align: left;
+    font-family: var(--px);
+    font-size: 8px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--panel);
+    background: var(--ink);
+    padding: 12px 14px;
+  }
+  tbody td {
+    padding: 12px 14px;
+    border-bottom: 2px solid var(--panel-border);
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.name { color: var(--ink); font-weight: 650; font-variant-numeric: normal; }
+  td.num { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  .hpcell { min-width: 170px; }
+  .hp { display: flex; align-items: center; gap: 8px; }
+  .hp .hplabel { font-family: var(--px); font-size: 7px; color: var(--ink-faint); }
+  .hp .bar {
+    flex: 1;
+    height: 10px;
+    border: 2px solid var(--ink);
+    background: var(--panel);
+    min-width: 70px;
+  }
+  .hp .fill { height: 100%; display: block; background: var(--good); }
+  .hp .fill.low { background: var(--warn); }
+  .hp .pct { font-family: var(--px); font-size: 8px; color: var(--ink); white-space: nowrap; }
+  .pill {
+    font-family: var(--px);
+    font-size: 7px;
+    padding: 4px 7px;
+    border: 2px solid currentColor;
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .pill.mastered { background: var(--good-soft); color: var(--good); }
+  .pill.progress { background: var(--warn-soft); color: var(--warn); }
+  .pill.retired { background: var(--bad-soft); color: var(--bad); }
+  tfoot td { font-weight: 700; color: var(--ink); border-top: 2px solid var(--ink); padding: 12px 14px; }
+  tfoot .pxnum { font-family: var(--px); font-size: 10px; color: var(--accent); }
+
+  /* ---------- spec cards ---------- */
+  .specgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
+    margin-top: 16px;
+  }
+  .speccard {
+    border: 2px solid var(--ink);
+    background: var(--panel);
+    box-shadow: 4px 4px 0 var(--shadow);
+    padding: 15px 17px;
+  }
+  .speccard .k {
+    font-family: var(--px);
+    font-size: 7px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  .speccard .v { font-size: 15px; font-weight: 650; color: var(--ink); }
+  .speccard .d { font-size: 12.5px; color: var(--ink-soft); margin-top: 5px; }
+
+  footer {
+    margin-top: 72px;
+    border: 2px solid var(--ink);
+    background: var(--panel);
+    box-shadow: 4px 4px 0 var(--shadow);
+    padding: 14px 18px;
+    font-family: var(--px);
+    font-size: 8px;
+    line-height: 2;
+    color: var(--ink-soft);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  footer .save { color: var(--good); }
+
+  @media (max-width: 620px) {
+    .statbar { grid-template-columns: repeat(2, 1fr); }
+    .pipeline { flex-direction: column; }
+    .arrow { display: none; }
+    .bezel { padding: 22px 18px 18px; }
+    .led-wrap { display: none; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="hero">
+    <div class="gameboy">
+      <div class="bezel">
+        <div class="stripes"></div>
+        <div class="led-wrap"><i class="led"></i><span>POWER</span></div>
+        <div class="lcd">
+          <h1 class="title">POKEMON RED AI</h1>
+          <p class="subtitle">TEACHING A MACHINE TO PLAY &mdash; ONE ROUTE, ONE BATTLE, ONE BAD IDEA AT A TIME</p>
+          <ul class="menu">
+            <li class="cursor">CONTINUE&nbsp;&nbsp;ROUND 20 &middot; ROUTE 3</li>
+            <li class="dim">NEW GAME</li>
+            <li class="dim">OPTION</li>
+          </ul>
+        </div>
+        <div class="btxt"><span>DOT MATRIX WITH 14 EMULATORS INSIDE</span><span>PROGRESS REPORT</span></div>
+      </div>
+    </div>
+
+    <div class="statbar">
+      <div class="stat">
+        <div class="n">~227K</div>
+        <div class="l">episodes trained, all phases</div>
+      </div>
+      <div class="stat">
+        <div class="n">4 / 6</div>
+        <div class="l">stages mastered</div>
+      </div>
+      <div class="stat">
+        <div class="n">14 / 18</div>
+        <div class="l">cores pinned for training</div>
+      </div>
+      <div class="stat">
+        <div class="n">ROUND 19</div>
+        <div class="l">current: Route 3 &rarr; Mt. Moon</div>
+      </div>
+    </div>
+    <p class="standing">
+      <strong>Where things stand as of the last check-in:</strong> 7,022 episodes
+      into the Mt. Moon run, cumulative success climbing to 24.5%, epsilon down
+      to 0.39 and still decaying. Nothing is stuck &mdash; see the save log below.
+    </p>
+  </header>
+
+  <section>
+    <h2>What Is This, Exactly?</h2>
+    <p>
+      We're teaching a computer to play Pokemon Red <strong>with no
+      walkthrough and no script telling it what to do</strong>. It starts
+      knowing nothing &mdash; not what a door is, not what a trainer is, not
+      that losing a battle is bad. It learns the way you'd train a very
+      persistent, very fast toddler: try things thousands of times, get
+      small rewards for progress and penalties for mistakes, and slowly
+      figure out what works.
+    </p>
+    <p>
+      The one rule the project holds itself to: <strong>scripts are only
+      allowed as scaffolding</strong>. It's fine to walk the character
+      somewhere once by hand to learn what the game's memory looks like
+      there, or to save a checkpoint so training doesn't replay the intro
+      every time &mdash; but the actual <em>playing</em> has to be learned.
+      Rather than pointing one giant AI at the whole game, it's broken into
+      bite-sized challenges &mdash; leave the house, cross a route, win a
+      battle &mdash; each one trained until mastered, then chained together.
+      The near-term target is Brock, the first Gym Leader. The long-term
+      dream, if the approach keeps scaling: the Elite Four.
+    </p>
+  </section>
+
+  <section>
+    <h2>Watch It Play</h2>
+    <p style="margin-bottom:18px;">
+      Each clip below is the trained agent playing on its own &mdash; no
+      human input, no script. These are the actual runs the training
+      produced.
+    </p>
+    <div class="gallery">
+      <div class="demo">
+        <div class="screenwrap">
+          <img src="__GIF_ROUTE1__" alt="Trained agent crossing Route 1" loading="lazy">
+          <div class="microtext"><span>ROUTE 1</span><i></i></div>
+        </div>
+        <div class="cap">
+          <div class="t">ROUTE 1 <span class="badge">&#9733; MASTERED</span></div>
+          <div class="s">The first real overworld crossing: Pallet Town to Viridian City, learned from scratch.</div>
+        </div>
+      </div>
+      <div class="demo">
+        <div class="screenwrap">
+          <img src="__GIF_ROUTE2__" alt="Trained agent crossing Route 2" loading="lazy">
+          <div class="microtext"><span>ROUTE 2</span><i></i></div>
+        </div>
+        <div class="cap">
+          <div class="t">ROUTE 2 <span class="badge">&#9733; MASTERED</span></div>
+          <div class="s">Short but ledge-riddled &mdash; one wrong step drops the agent back where it started.</div>
+        </div>
+      </div>
+      <div class="demo">
+        <div class="screenwrap">
+          <img src="__GIF_FOREST__" alt="Trained agent navigating Viridian Forest" loading="lazy">
+          <div class="microtext"><span>VIRIDIAN FOREST</span><i></i></div>
+        </div>
+        <div class="cap">
+          <div class="t">VIRIDIAN FOREST <span class="badge">&#9733; MASTERED</span></div>
+          <div class="s">A 127-hop maze with forced trainer fights &mdash; the battles are fought by a separately-trained battle AI, mid-walk.</div>
+        </div>
+      </div>
+      <div class="demo">
+        <div class="screenwrap">
+          <img src="__GIF_ROUTE3__" alt="Trained agent running Route 3's trainer gauntlet" loading="lazy">
+          <div class="microtext"><span>ROUTE 3</span><i></i></div>
+        </div>
+        <div class="cap">
+          <div class="t">ROUTE 3 <span class="badge">&#9678; FIRST RUN, RETIRED</span></div>
+          <div class="s">Best demo from the 463-round first attempt &mdash; flawless execution toward what turned out to be the wrong goal. The rematch is in progress.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Route Progress</h2>
+    <div class="pipeline">
+      <div class="tile done"><span class="status">Mastered</span><div class="name">Bedroom &rarr; Outside</div><div class="sub">scripted scaffold</div></div>
+      <div class="arrow">&#9654;</div>
+      <div class="tile done"><span class="status">Mastered</span><div class="name">Reach Oak</div><div class="sub">tabular Q-learning</div></div>
+      <div class="arrow">&#9654;</div>
+      <div class="tile done"><span class="status">Mastered</span><div class="name">Wild &amp; Trainer Battles</div><div class="sub">DQN policies</div></div>
+      <div class="arrow">&#9654;</div>
+      <div class="tile done"><span class="status">Mastered</span><div class="name">Route 1 &middot; Viridian Forest &middot; Route 2</div><div class="sub">88.7% &middot; 84.9% &middot; 87.6%</div></div>
+      <div class="arrow">&#9654;</div>
+      <div class="tile active"><span class="status">In progress</span><div class="name">Route 3 &rarr; Mt. Moon</div><div class="sub">round 19, 24.5%</div></div>
+      <div class="arrow">&#9654;</div>
+      <div class="tile next"><span class="status">Next</span><div class="name">Mt. Moon &middot; Pewter Gym</div><div class="sub">not started</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The Route 3 Story</h2>
+    <p>
+      Route 3 was "solved" once already &mdash; 463 rounds, 184,836 episodes,
+      95.5% success &mdash; before anyone noticed the goal tile it was
+      solving for wasn't real. It was the deepest point an automated map
+      survey could reach, not an actual exit. The survey's own method made
+      it structurally blind to what was past that point.
+    </p>
+
+    <div class="dialog bug">
+      <span class="tag">The bug</span>
+      <p>
+        Gen 1 trainers battle exactly once. A survey that restores to a
+        pre-battle snapshot before testing each direction can never see
+        what opens up <em>after</em> a trainer is genuinely defeated &mdash;
+        so the automated exploration hit a wall of undefeated trainers and
+        concluded nothing lay beyond it. 20+ automated retests all agreed.
+        All of them were wrong.
+      </p>
+    </div>
+    <div class="dialog find">
+      <span class="tag">The find</span>
+      <p>
+        Not something automation could have caught: the fix came from a
+        human who actually knew the map &mdash; "you can get to Mt. Moon that
+        way by beating more of them" &mdash; followed by a save state and an
+        exact button sequence played back manually to prove the path was
+        real: beat the trainer, back up a tile, go around.
+      </p>
+    </div>
+    <div class="dialog fix">
+      <span class="tag">The fix</span>
+      <p>
+        A real flood-fill from the post-victory position, merged with the
+        old survey's data, took the known map from 125 tiles / 384 edges /
+        4 exits to <strong>435 tiles / 1,430 edges / 9 exits</strong> &mdash;
+        5 of them genuine doors into Mt. Moon. Training was retargeted at
+        the real goal and restarted from scratch.
+      </p>
+    </div>
+
+    <div class="mapfig">
+      <img src="__MAP_ROUTE3__" alt="Stitched panorama of the surveyed Route 3 map">
+      <div class="cap">
+        The re-surveyed Route 3, stitched from the emulator's own screen:
+        the corridor the old survey knew stops less than halfway across.
+        Everything east of it &mdash; including the Mt. Moon entrance &mdash;
+        only became visible once the survey learned to fight its way through.
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Milestones Along the Way</h2>
+    <p style="margin-bottom:18px;">
+      The route map above is the headline, but most of the project's life
+      is spent on the unglamorous steps that make each route trainable.
+    </p>
+    <div class="milestones">
+      <div class="ms"><span class="mark learned">learned</span><div class="body"><strong>Leaving the bedroom &amp; reaching Professor Oak</strong> &mdash; the project's first two learned behaviors, proof the whole reward-and-repetition loop works before pointing it at anything hard.</div></div>
+      <div class="ms"><span class="mark learned">learned</span><div class="body"><strong>Three battle brains</strong> &mdash; separate neural-network policies for rival battles, wild encounters, and trainer fights. The navigation agents hand off to them mid-walk whenever a fight starts, then pick the walk back up.</div></div>
+      <div class="ms"><span class="mark learned">learned</span><div class="body"><strong>Catching Pokemon</strong> &mdash; the wild-battle brain got a throw-a-ball action. Took five retrains to get right: the first attempts never caught anything because a tracking bug made the game think everything was already caught &mdash; and, memorably, because every save state up to then carried <em>zero Poke Balls</em>.</div></div>
+      <div class="ms"><span class="mark scaffold">scaffold</span><div class="body"><strong>The Route 3 party grind</strong> &mdash; 143 scripted battles raising the team from Lv13 to Lv20, because the entry-level party was losing up to 72% of its HP per fight and couldn't survive what exploration would throw at it.</div></div>
+      <div class="ms"><span class="mark scaffold">scaffold</span><div class="body"><strong>Map surveys</strong> &mdash; automated crawls that walk every reachable tile of a route and record exactly which steps work, producing the maps the reward signals are built from. Route 3's needed two tries &mdash; see the story above.</div></div>
+      <div class="ms"><span class="mark infra">infra</span><div class="body"><strong>The training harness itself</strong> &mdash; 14 parallel emulators with self-balancing workloads, resume-from-checkpoint after any interruption, live progress reports with honest ETAs, and a "finish by 3 PM so I can close the laptop and get my kid" deadline mode.</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Recent Checkpoints</h2>
+    <div class="timeline">
+      <div class="tlitem resolved">
+        <div class="when">MORNING CHECK-IN, AFTER THE OVERNIGHT RELAUNCH</div>
+        <h3>Resumed cleanly on the 14-core pinned command</h3>
+        <p>
+          First look at results after switching the run to
+          <code>POKEMON_RED_WORKERS=14</code> at full priority so 4 cores
+          stayed free for the owner's own use. The resumed run had picked up
+          progress correctly and was climbing at a normal pace &mdash; no
+          numbers worth freezing in time here, just confirmation the restart
+          didn't lose anything.
+        </p>
+      </div>
+      <div class="tlitem warn">
+        <div class="when">AUG 3, 4:11 PM &ndash; 8:42 PM PDT</div>
+        <h3>Round 16 appears to freeze at 42%, then breaks loose</h3>
+        <p>
+          Eight consecutive 15-minute status checks all read the same:
+          166/400 episodes claimed, no forward movement, for two full hours.
+          <code>ps aux</code> showed all 14 workers at ~100% CPU with
+          accumulated CPU time tracking wall-clock elapsed almost exactly
+          &mdash; genuinely computing, not deadlocked. A timed replay of the
+          exact conditions (same map, same ~0.4 epsilon, the real
+          trainer-battle model) clocked worst-case, max-length episodes at
+          ~25 seconds each: 20&ndash;30&times; faster than the observed rate
+          implied, ruling out "these are just long episodes" as the
+          explanation on its own. Leading theory: sustained multi-hour
+          full-core load on a laptop is a classic thermal-throttling
+          trigger &mdash; clock speed drops while usage still reads ~100%,
+          indistinguishable from healthy progress unless you go looking.
+          The round then recovered on its own, climbing steadily from
+          166&rarr;345/400 (86%) by the last check before finishing.
+        </p>
+        <div class="metrics">
+          <span>166/400 &middot; 2 HRS FLAT</span>
+          <span>14/14 WORKERS @ 100% CPU</span>
+          <span>~25S/EPISODE MEASURED</span>
+          <span>RECOVERED ON ITS OWN</span>
+        </div>
+      </div>
+      <div class="tlitem resolved">
+        <div class="when">AUG 5, 1:17 PM PDT</div>
+        <h3>Round 19 checkpoint</h3>
+        <p>
+          <code>total_episodes=7022  epsilon=0.390  successes this round:
+          168/311  cumulative: 1719/7022  per-worker: 6-67</code>. The wide
+          6&ndash;67 per-worker range is the self-balancing claim system
+          doing its job &mdash; faster cores simply finish more episodes
+          instead of the round waiting on the slowest one. Progress saved
+          through round 19; the next launch resumes at round 20.
+        </p>
+        <div class="metrics">
+          <span>7,022 TOTAL EPISODES</span>
+          <span>24.5% CUMULATIVE</span>
+          <span>EPSILON 0.390</span>
+          <span>RESUMES AT ROUND 20</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Computational Horsepower</h2>
+    <p>Everything here runs on one machine, trained in the open, in between the owner's actual life.</p>
+
+    <div class="specgrid">
+      <div class="speccard">
+        <div class="k">Hardware</div>
+        <div class="v">Apple M-series, 18 cores</div>
+        <div class="d">6 high-performance &ldquo;super&rdquo; cores + 12 standard performance cores &mdash; no hyperthreading, so every pinned core is a full physical core.</div>
+      </div>
+      <div class="speccard">
+        <div class="k">Allocation</div>
+        <div class="v">14 cores pinned</div>
+        <div class="d">4 held back so the machine stays usable for everything else while training runs for days at a stretch.</div>
+      </div>
+      <div class="speccard">
+        <div class="k">Scheduling</div>
+        <div class="v">QoS-biased, not hard-pinned</div>
+        <div class="d">macOS has no CPU affinity API. Workers self-tag <code>QOS_CLASS_UTILITY</code> to steer off the super-core tier under contention, switchable between full-priority and low-priority-yielding runs.</div>
+      </div>
+      <div class="speccard">
+        <div class="k">Work distribution</div>
+        <div class="v">Self-balancing claims</div>
+        <div class="d">Workers pull from a shared episode budget instead of a fixed split, so faster cores simply do more &mdash; no idle tail waiting on the slowest worker.</div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:30px;">Episodes trained, by phase</h3>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Phase</th><th>Rounds</th><th>Episodes</th><th>Success</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="name">Viridian Forest (curriculum)</td><td class="num">44</td><td class="num">17,600</td><td class="hpcell"><div class="hp"><span class="hplabel">HP</span><span class="bar"><span class="fill" style="width:84.9%;"></span></span><span class="pct">84.9</span></div></td><td><span class="pill mastered">mastered</span></td></tr>
+          <tr><td class="name">Route 1</td><td class="num">23</td><td class="num">9,200</td><td class="hpcell"><div class="hp"><span class="hplabel">HP</span><span class="bar"><span class="fill" style="width:88.7%;"></span></span><span class="pct">88.7</span></div></td><td><span class="pill mastered">mastered</span></td></tr>
+          <tr><td class="name">Route 2</td><td class="num">20</td><td class="num">8,000</td><td class="hpcell"><div class="hp"><span class="hplabel">HP</span><span class="bar"><span class="fill" style="width:87.6%;"></span></span><span class="pct">87.6</span></div></td><td><span class="pill mastered">mastered</span></td></tr>
+          <tr><td class="name">Route 3 (old, false goal)</td><td class="num">463</td><td class="num">184,836</td><td class="hpcell"><div class="hp"><span class="hplabel">HP</span><span class="bar"><span class="fill" style="width:95.5%;"></span></span><span class="pct">95.5</span></div></td><td><span class="pill retired">retired</span></td></tr>
+          <tr><td class="name">Route 3 (real goal: Mt. Moon)</td><td class="num">19&nbsp;so&nbsp;far</td><td class="num">7,022&nbsp;so&nbsp;far</td><td class="hpcell"><div class="hp"><span class="hplabel">HP</span><span class="bar"><span class="fill low" style="width:24.5%;"></span></span><span class="pct">24.5</span></div></td><td><span class="pill progress">running</span></td></tr>
+        </tbody>
+        <tfoot>
+          <tr><td colspan="2">Total tabular-RL episodes run</td><td colspan="3"><span class="pxnum">226,658</span></td></tr>
+        </tfoot>
+      </table>
+    </div>
+    <p style="margin-top:12px; font-size: 13px;">
+      Plus three DQN battle policies (wild encounters, trainer battles, rival battles) trained separately on Stable-Baselines3 &mdash;
+      the wild-battle one alone went through five retrains chasing a catching bug before landing on its current budget.
+    </p>
+
+    <div class="dialog plain" style="margin-top: 26px;">
+      <span class="tag">Keeping the compute honest</span>
+      <p>
+        A CPU-pegged process isn't always a healthy one &mdash; round 16's
+        apparent two-hour freeze (see Recent Checkpoints above) turned out
+        to most likely be thermal throttling, not a hang. Worth remembering
+        on any multi-day, full-core run: "still computing" and "computing at
+        full speed" read identically in <code>ps</code>.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <span class="save">&#9654; SAVING&hellip; DON'T TURN OFF THE POWER</span>
+    <span>lonezebra/pokemon-red-ai &middot; claude/project-review-qa-4mis93</span>
+  </footer>
+
+</div>
