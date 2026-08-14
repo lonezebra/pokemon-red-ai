@@ -1,0 +1,412 @@
+"""
+One environment for the whole game, played from the bedroom.
+
+Every other env in this project hands the agent a small, already-scoped task:
+walk this route, win this battle. This one hands it a Game Boy. There is no
+goal tile, no per-task save state, and no scripted bridge to the next
+segment -- the agent presses buttons and the reward comes from whatever
+progress the game itself records (see rewards/whole_game_rewards.py).
+
+It is deliberately additive. Nothing here replaces the segmented skills in
+envs/route*.py, envs/*_battle_env.py or controller.py, which are trained,
+measured and working; this is the other bet running alongside them, and
+keeping both is what makes comparing them honest.
+
+Two structural differences from the navigation envs worth knowing before
+reading further:
+
+- It is a real gymnasium.Env (5-argument reset, 5-tuple step), matching
+  envs/battle_env.py rather than envs/route3_env.py. The navigation envs are
+  plain classes shaped for the tabular Q-learner in agents/, and nothing
+  about them is reusable for Stable-Baselines3.
+- Actions are raw button presses, not walk_tile() calls. The navigation envs
+  can afford position-aware movement helpers because they only ever walk;
+  this agent has to survive menus, dialogue and battles, where "did my
+  position change" means nothing and the only honest interface is the one a
+  player has.
+"""
+
+from collections import deque
+
+import gymnasium as gym
+import numpy as np
+from gymnasium import spaces
+
+from core.config import PROJECT_ROOT
+from core.controls import press_button
+from core.emulator import create_emulator, run_frames
+from core.memory import (
+    get_badges,
+    get_event_flags_sum,
+    get_held_milestone_items,
+    get_map_id,
+    get_money,
+    get_party_count,
+    get_party_hp_total_fraction,
+    get_party_levels,
+    get_player_position,
+    get_player_x,
+    get_player_y,
+    get_pokedex_owned_count,
+    is_in_battle,
+)
+from core.state import load_state
+from rewards.whole_game_rewards import (
+    MILESTONE_DELIVERED_REWARD,
+    MILESTONE_ITEM_IDS,
+    MILESTONE_PICKUP_REWARD,
+    calculate_whole_game_reward,
+)
+
+DEFAULT_START_STATE = PROJECT_ROOT / "saves" / "bedroom.state"
+
+# START is left out on purpose. It opens the menu whose first entries include
+# SAVE, and an agent that explores by pressing things has no way to know that
+# is different from any other button -- it would spend a lot of its budget
+# inside menus it cannot read. It comes back when something actually needs
+# it (using an HM, or an item mid-battle), which is a later milestone.
+ACTIONS = ["down", "left", "right", "up", "a", "b"]
+
+# One action costs 24 frames, split so the press is unambiguous and the game
+# gets time to react before the next observation is read. This matches the
+# act_freq PWhiddy's project settled on: short enough that a step is a real
+# decision, long enough that a walk actually completes.
+HOLD_FRAMES = 8
+RELEASE_FRAMES = 16
+
+# The Game Boy screen is 144x160; halving it keeps every feature that matters
+# (text is still legible as shape, the player sprite is still distinct) at a
+# quarter of the pixels. Three stacked frames give the network motion, which
+# a single frame cannot -- standing still and walking look identical in one
+# still image.
+SCREEN_HEIGHT = 72
+SCREEN_WIDTH = 80
+FRAME_STACK = 3
+
+# Roughly 1.8 in-game hours per episode. Long enough to reach somewhere new
+# from the start, short enough that a policy stuck in a corner gets reset
+# rather than burning a whole rollout.
+DEFAULT_MAX_STEPS = 16384
+
+# Normalisation divisors for the stats vector. These only need to be stable
+# and roughly right -- they exist to keep every feature in 0-1 so no single
+# one dominates the input, not to be exact.
+MAX_BADGES = 8
+MAX_PARTY = 6
+MAX_LEVEL = 100
+MAX_POKEDEX = 151
+MAX_MONEY = 999999
+MAX_MAP_ID = 255
+
+# Player tile coordinates. No Pokemon Red map is larger than 255 in either
+# axis (the biggest are Routes at ~70 tiles), so a single flat divisor keeps
+# both axes in 0-1 without needing a per-map dimension table this project
+# does not have. Exact scale does not matter -- what matters is that two
+# adjacent tiles get two different numbers, which is the whole point of
+# adding them; see the observation comment for why.
+MAX_TILE_COORD = 255
+
+
+class PokemonRedWholeGameEnv(gym.Env):
+    metadata = {"render_modes": []}
+
+    def __init__(self, start_state=None, max_steps=DEFAULT_MAX_STEPS):
+        super().__init__()
+
+        self.start_state = start_state or DEFAULT_START_STATE
+        self.max_steps = max_steps
+        self.pyboy = create_emulator()
+
+        self.action_space = spaces.Discrete(len(ACTIONS))
+        self.observation_space = spaces.Dict({
+            "screen": spaces.Box(
+                low=0, high=255,
+                shape=(SCREEN_HEIGHT, SCREEN_WIDTH, FRAME_STACK),
+                dtype=np.uint8,
+            ),
+            # Read straight from verified memory addresses rather than left
+            # for the network to infer from pixels. PWhiddy's agent has to
+            # work out "how many badges do I have" from a menu screen it
+            # almost never sees; this project already knows the address, and
+            # handing it over directly is free sample-efficiency.
+            #
+            # The 9th slot (holding a tracked milestone item, e.g. Oak's
+            # Parcel) exists because this network has no recurrence -- no
+            # LSTM, no persistent hidden state -- so it cannot remember
+            # anything across steps except what's directly in its input.
+            # Picking the Parcel up and delivering it are thousands of steps
+            # apart; without this flag the milestone reward in
+            # whole_game_rewards.py could still pay out, but the policy
+            # would have no way to condition "go find Oak now" on a fact it
+            # can't perceive.
+            #
+            # Slots 10 and 11 are the player's tile (x, y), added at 330M
+            # steps after instrumenting a stall that cost roughly half of
+            # every episode. The policy had learned "on the bottom row of
+            # Oak's Lab, press DOWN to leave" -- correct on the exit mat at
+            # (5,11), a wall one tile east at (6,11). Measured over four
+            # episodes: 11,844 DOWN presses at (6,11), zero of which moved
+            # the player, against every single real exit happening from
+            # (5,11); a scripted LEFT-then-DOWN from the stuck tile escaped
+            # 4 times out of 4. The cause is that the two tiles are nearly
+            # indistinguishable in the observation -- the camera holds the
+            # player centred, so one tile of horizontal difference is a
+            # handful of pixels in a 72x80 greyscale frame, and map_id is
+            # identical either side. Position is a value this project
+            # already reads from a verified address, so handing it over
+            # directly is the same trade the badge/party/money slots above
+            # already make: free discrimination the network would otherwise
+            # have to infer from pixels, and in this case demonstrably
+            # could not.
+            "stats": spaces.Box(
+                low=0.0, high=1.0, shape=(11,), dtype=np.float32
+            ),
+        })
+
+        self.frames = deque(maxlen=FRAME_STACK)
+        self.visited_tiles = set()
+        self.step_count = 0
+
+        # Debounce state for the milestone-item bag read -- see
+        # _update_milestone_state()'s docstring for why this exists.
+        self._confirmed_milestone = frozenset()
+        self._prev_raw_milestone = frozenset()
+
+        # Per-episode "already credited" sets -- see step()'s comment on
+        # why milestone credit is capped to once per item per episode.
+        self._milestone_pickup_credited = frozenset()
+        self._milestone_delivery_credited = frozenset()
+
+    def _grab_frame(self):
+        """One downsampled grayscale frame.
+
+        pyboy.screen.ndarray is a live view straight into the emulator's
+        framebuffer, so it is copied here rather than retained -- the next
+        tick would otherwise rewrite a frame already sitting in the stack.
+        """
+        raw = self.pyboy.screen.ndarray  # (144, 160, 4) uint8 RGBA
+        downsampled = raw[::2, ::2, :3]  # (72, 80, 3), alpha dropped
+        return downsampled.mean(axis=2).astype(np.uint8)
+
+    def _update_milestone_state(self):
+        """Refreshes self._confirmed_milestone from a fresh bag read,
+        requiring two consecutive matching reads before trusting a change.
+
+        Found necessary the hard way: a real overnight rollout showed a
+        handful of episodes -- out of 12 -- with a `milestone` reward
+        component in the hundreds to thousands (one as high as 2735),
+        each traceable to dozens of spurious pickup/delivery transitions
+        with no real Parcel activity behind them. WRAM is not perfectly
+        stable to read at an arbitrary instant (this project already knew
+        that from an earlier `levels: [0]` mid-transaction read); the bag
+        array is apparently reused for something else during specific
+        game states, and a single bad read of it is invisible for
+        badge/event/heal (whose reward is `max(0, delta)`, so a false
+        decrease is simply free) but not for the milestone reward, which
+        scores *both* directions as positive. Requiring the same reading
+        on two consecutive real steps before promoting it to "confirmed"
+        delays genuine pickups/deliveries by at most one ~24-frame step --
+        immaterial to the learning signal -- while filtering out anything
+        that doesn't hold steady across two independent frame reads.
+        """
+        raw = get_held_milestone_items(self.pyboy, MILESTONE_ITEM_IDS)
+        if raw == self._prev_raw_milestone:
+            self._confirmed_milestone = raw
+        self._prev_raw_milestone = raw
+        return self._confirmed_milestone
+
+    def _read_state(self):
+        """Everything the reward function scores, in one snapshot."""
+        hp_fraction = get_party_hp_total_fraction(self.pyboy)
+        party_count = get_party_count(self.pyboy)
+
+        return {
+            "badges": get_badges(self.pyboy),
+            "events": get_event_flags_sum(self.pyboy),
+            "levels": get_party_levels(self.pyboy),
+            "hp_fraction": hp_fraction,
+            "party_count": party_count,
+            # A party that exists but has no health left means every Pokemon
+            # fainted. The game handles the rest itself (warp to a Pokemon
+            # Center, full heal), so this is only ever true for the handful
+            # of steps before that happens -- which is exactly when it should
+            # be scored.
+            "blacked_out": party_count > 0 and hp_fraction <= 0.0,
+            "milestone_items": self._update_milestone_state(),
+            # For the carry-home shaping term in whole_game_rewards.py --
+            # needs to know which map the agent is on both before and after
+            # a step to tell whether it moved a hop closer to Oak's Lab
+            # while holding the Parcel.
+            "map_id": get_map_id(self.pyboy),
+        }
+
+    def _observation(self):
+        levels = get_party_levels(self.pyboy)
+        # Same debounced value _read_state() just computed for this exact
+        # frame -- not a second independent bag read, which would just
+        # reintroduce the instability this is built to avoid.
+        holding_milestone_item = bool(self._confirmed_milestone)
+
+        # Order matters and must never be reshuffled: a trained checkpoint
+        # binds each slot to a weight column, so inserting or reordering
+        # entries silently rewires an existing policy. New features go on
+        # the end -- which is exactly how (x, y) were added.
+        stats = np.array([
+            get_badges(self.pyboy) / MAX_BADGES,
+            get_party_count(self.pyboy) / MAX_PARTY,
+            (max(levels) if levels else 0) / MAX_LEVEL,
+            get_party_hp_total_fraction(self.pyboy),
+            get_pokedex_owned_count(self.pyboy) / MAX_POKEDEX,
+            min(get_money(self.pyboy) / MAX_MONEY, 1.0),
+            1.0 if is_in_battle(self.pyboy) else 0.0,
+            get_map_id(self.pyboy) / MAX_MAP_ID,
+            1.0 if holding_milestone_item else 0.0,
+            get_player_x(self.pyboy) / MAX_TILE_COORD,
+            get_player_y(self.pyboy) / MAX_TILE_COORD,
+        ], dtype=np.float32)
+
+        return {
+            "screen": np.stack(self.frames, axis=-1),
+            "stats": np.clip(stats, 0.0, 1.0),
+        }
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+
+        load_state(self.pyboy, self.start_state)
+        run_frames(self.pyboy, 30)
+
+        self.step_count = 0
+
+        # Per-episode, not global. A tile is "new" relative to this rollout,
+        # so exploring the same early route again still pays -- which is what
+        # keeps the agent willing to walk back through known ground to reach
+        # the frontier, instead of treating everything it has ever seen as
+        # worthless.
+        self.visited_tiles = {self._tile_key()}
+
+        frame = self._grab_frame()
+        self.frames.clear()
+        for _ in range(FRAME_STACK):
+            self.frames.append(frame)
+
+        # Seeds the milestone debounce directly from a real read rather
+        # than through _update_milestone_state()'s two-reads-agree check --
+        # otherwise a fresh episode starting from a bag-empty save state
+        # right after a previous episode ended mid-holding the item would
+        # spend its first real step wrongly still "confirmed holding",
+        # since _prev_raw_milestone would carry over stale from that
+        # previous episode. A new episode's start state is trusted
+        # immediately; only within-episode changes need confirming.
+        self._confirmed_milestone = get_held_milestone_items(
+            self.pyboy, MILESTONE_ITEM_IDS
+        )
+        self._prev_raw_milestone = self._confirmed_milestone
+        self._milestone_pickup_credited = frozenset()
+        self._milestone_delivery_credited = frozenset()
+
+        # Seeds the "before" side of the first step. See step()'s comment
+        # on why this is cached rather than re-read live every time.
+        self._last_state = self._read_state()
+
+        return self._observation(), {}
+
+    def _tile_key(self):
+        position = get_player_position(self.pyboy)
+        return (position["map_id"], position["x"], position["y"])
+
+    def step(self, action):
+        # `before` is whatever `after` was at the end of the previous step --
+        # no frames run between one step's end and the next one's start, so
+        # nothing about the game state can have changed. Re-reading it live
+        # here (as this used to) reads the *same true state* independently
+        # via two separate WRAM accesses instead of one -- harmless for
+        # badge/event/heal (`max(0, delta)` makes a false decrease free) but
+        # not for the milestone reward; see _update_milestone_state() for
+        # why that matters. Caching the previous read removes the second,
+        # independent read entirely -- one read per true state, not two.
+        before = self._last_state
+
+        press_button(
+            self.pyboy, ACTIONS[int(action)],
+            hold_frames=HOLD_FRAMES, release_frames=RELEASE_FRAMES,
+        )
+
+        after = self._read_state()
+        self._last_state = after
+        self.step_count += 1
+
+        tile = self._tile_key()
+        tile_is_new = tile not in self.visited_tiles
+        self.visited_tiles.add(tile)
+
+        reward, components = calculate_whole_game_reward(
+            before, after, tile_is_new
+        )
+
+        # Milestone credit is capped to once per item per episode -- this
+        # is a real constraint of the game, not an approximation (you
+        # cannot pick up or deliver the same key item twice in one
+        # playthrough), and it turns out to matter operationally too: a
+        # real overnight rollout showed the bag read genuinely, stably
+        # alternating between holding Oak's Parcel and holding a Potion
+        # every ~20-30 steps while the agent stood still at a fixed spot
+        # in the Viridian Pokemon Center -- not a one-frame glitch (the
+        # debounce in _update_milestone_state() never caught it, since
+        # both reads agreed each time), most likely some other menu
+        # reusing the same WRAM bytes as the bag while open, still not
+        # fully root-caused. One episode hit +2735 in `milestone` alone
+        # from dozens of repeated pickup/delivery transitions with no
+        # real Parcel activity behind them. This caps the damage to
+        # MILESTONE_PICKUP_REWARD + MILESTONE_DELIVERED_REWARD per item
+        # per episode (40.0 for the Parcel) no matter how the underlying
+        # signal misbehaves, independent of whatever is actually causing it.
+        picked_up = after["milestone_items"] - before["milestone_items"]
+        delivered = before["milestone_items"] - after["milestone_items"]
+        new_pickup_credit = picked_up - self._milestone_pickup_credited
+        new_delivery_credit = (
+            (delivered & self._milestone_pickup_credited)
+            - self._milestone_delivery_credited
+        )
+        capped_milestone = (
+            MILESTONE_PICKUP_REWARD * len(new_pickup_credit)
+            + MILESTONE_DELIVERED_REWARD * len(new_delivery_credit)
+        )
+        if capped_milestone != components["milestone"]:
+            reward += capped_milestone - components["milestone"]
+            components["milestone"] = capped_milestone
+        self._milestone_pickup_credited |= new_pickup_credit
+        self._milestone_delivery_credited |= new_delivery_credit
+
+        self.frames.append(self._grab_frame())
+
+        # Never `terminated`: Pokemon Red has no losing end state that stops
+        # play. Blacking out warps the player to a Pokemon Center and the
+        # game carries on, so it is scored as a penalty (see
+        # whole_game_rewards.BLACKOUT_PENALTY) rather than ending the
+        # episode -- recovering from it is a thing worth learning.
+        truncated = self.step_count >= self.max_steps
+
+        info = {
+            "reward_components": components,
+            "badges": after["badges"],
+            "events": after["events"],
+            "party_levels": after["levels"],
+            "tiles_explored": len(self.visited_tiles),
+            # Full position, not just the map: the mashup renderer draws
+            # sprites at (x, y) within one map's panorama, so a rollout that
+            # only recorded which map it was on couldn't be visualised at
+            # all. See render_whole_game_runs.py.
+            "map_id": tile[0],
+            "x": tile[1],
+            "y": tile[2],
+        }
+
+        return self._observation(), reward, False, truncated, info
+
+    def close(self):
+        # SubprocVecEnv builds and tears these down by the dozen, and each
+        # one holds a real emulator; leaking them exhausts the machine.
+        if self.pyboy is not None:
+            self.pyboy.stop()
+            self.pyboy = None
