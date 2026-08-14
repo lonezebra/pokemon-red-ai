@@ -9,6 +9,23 @@ and where it's headed. It's written so that even if you've never trained an
 AI model or written a line of Python, you can follow along and understand
 what's happening — and hopefully get curious enough to run it yourself.
 
+> **2026-08-08: the strategy changed.** Everything below through "What's
+> designed but not built yet" describes the project's original approach --
+> one small trained skill per task (leave the house, walk a route, win a
+> battle), chained together by `src/controller.py`. That code moved to
+> `archive/segmented-skills/` (see the README there) and isn't being
+> developed further; it's kept, not deleted, since real trained results
+> (checkpoints, Q-tables, verified save states) came out of it and still
+> live in `models/`/`saves/` unchanged.
+>
+> The project now trains a single end-to-end PPO agent
+> (`src/train_whole_game.py`) that plays from the bedroom with no
+> per-milestone hand-offs -- one policy, screen pixels plus a handful of
+> verified memory reads (badges, party, story-event flags) as input, reward
+> from exploring new ground and real game progress. The sections below are
+> left as-is as the record of how the original approach got as far as
+> Brock's badge; they're history now, not the current plan.
+
 ## The big idea
 
 Most "AI plays Pokemon" projects you might picture either hard-code every

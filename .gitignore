@@ -49,6 +49,22 @@ models/**
 !models/*_stages.json
 models/parallel_workers/
 models/parallel_survey_workers/
+# The whole-game PPO run is the one place the "track the trained policy"
+# rule above does not fit. Those policies are small and written once; this
+# one is 7.8MB (it carries a screen CNN, not a 6-number MLP) and
+# CheckpointCallback rewrites it every 100k steps, so a single 10M-step run
+# would push the better part of a gigabyte of near-identical blobs into
+# history -- permanently, since git keeps every version.
+#
+# Losing them costs GPU hours, not the irreplaceable hand-verified work the
+# save states and survey metadata represent, and a run resumes from whatever
+# checkpoint is on disk regardless. Promoting a finished policy into the repo
+# stays a deliberate `git add -f`, not something a background checkpoint does
+# by accident.
+models/whole_game_ppo/
+models/whole_game_ppo_*/
+models/whole_game_tensorboard/
+models/whole_game_rollouts/
 
 # screenshots/: the *_meta.json survey results are the expensive part --
 # tiles, exits, and the walkable-adjacency graph an exhaustive parallel
@@ -69,3 +85,16 @@ screenshots/**
 # the GIF was rendered from.
 !screenshots/mashups/**/*.gif
 !screenshots/mashups/**/*.json
+# ...but the whole-game eval renders are not that exception. The un-ignore
+# above was written when a mashup was one map and under 1MB; the whole-game
+# renderer emits a folder of per-map GIFs for *every checkpoint evaluated*
+# (139MB and counting), all regenerable from render_whole_game_runs.py plus
+# a rollout JSON. Same story as the checkpoints themselves: bulk output of
+# a run, not hand-verified work.
+screenshots/mashups/whole_game_*/
+
+# The archived track's training scratch: 96MB of per-round demo frames the
+# old per-segment trainers wrote. Kept on disk with the archive, but it is
+# exactly the "any later round supersedes it" class the GIF rule above
+# already refuses.
+archive/segmented-skills/screenshots/training_scratch/

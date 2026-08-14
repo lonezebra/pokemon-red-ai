@@ -5,7 +5,7 @@ import random
 import signal
 import time
 import multiprocessing as mp
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from agents.q_learning_agent import QLearningAgent
@@ -104,6 +104,14 @@ STATUS_INTERVAL_SECONDS = int(
     os.environ.get("POKEMON_RED_STATUS_INTERVAL_SECONDS") or 900
 )
 
+# "HH:MM", 24-hour, Pacific time -- e.g. "12:00" or "23:30". Rounds are a
+# barrier that can run from minutes to hours, so this can't just check
+# the clock between episodes the way the graceful-stop path does for
+# Ctrl-C; it reuses that same drain-the-budget mechanism instead of
+# hard-killing whatever's in flight when the deadline hits. See
+# _resolve_stop_by for how "HH:MM" becomes an absolute deadline.
+DEFAULT_STOP_BY = os.environ.get("POKEMON_RED_STOP_BY") or None
+
 # Pacific rather than the container's own (usually UTC) clock: this
 # project's training runs live on the user's own Mac, so the
 # stamp printed alongside progress should read in the timezone
@@ -116,6 +124,35 @@ PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 def _pacific_timestamp():
     return datetime.now(PACIFIC_TZ).strftime("%Y-%m-%d %I:%M:%S %p %Z")
+
+
+def _resolve_stop_by(spec):
+    """
+    Turn "HH:MM" into the next absolute Pacific-time datetime that clock
+    time occurs at -- today if it hasn't passed yet, tomorrow if it has.
+    A stop-by time is always meant as "the next time this happens", not a
+    specific date, since this runs for hours at a stretch and the user
+    isn't expected to think about which calendar day midnight falls on.
+    """
+    if not spec:
+        return None
+
+    try:
+        hour_str, minute_str = spec.split(":", 1)
+        hour, minute = int(hour_str), int(minute_str)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+    except ValueError:
+        raise ValueError(
+            f"POKEMON_RED_STOP_BY={spec!r} isn't a HH:MM 24-hour time, "
+            f"e.g. '12:00' or '23:30'"
+        )
+
+    now = datetime.now(PACIFIC_TZ)
+    deadline = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if deadline <= now:
+        deadline += timedelta(days=1)
+    return deadline
 
 
 WARM_START_EPSILON = 0.3
@@ -199,6 +236,24 @@ def run_demo_episode(env, agent, max_steps):
 
 _STOP_REQUESTED = False
 _CURRENT_BUDGET = None
+_STOP_REASON = None
+
+
+def _drain_and_stop(reason):
+    """
+    Shared by Ctrl-C and the stop-by deadline: zero the round's shared
+    episode budget so every worker finishes the episode it's on and
+    exits, then let the driver merge and save as it would at the end of
+    any round. See _request_graceful_stop for why draining beats killing.
+    """
+    global _STOP_REQUESTED, _STOP_REASON
+
+    _STOP_REQUESTED = True
+    _STOP_REASON = reason
+
+    if _CURRENT_BUDGET is not None:
+        with _CURRENT_BUDGET.get_lock():
+            _CURRENT_BUDGET.value = 0
 
 
 def _request_graceful_stop(signum, frame):
@@ -223,16 +278,10 @@ def _request_graceful_stop(signum, frame):
     A second Ctrl-C escalates to the old behavior, so a wedged episode
     can't trap someone who genuinely needs the cores back now.
     """
-    global _STOP_REQUESTED
-
     if _STOP_REQUESTED:
         raise KeyboardInterrupt("second interrupt: abandoning the round")
 
-    _STOP_REQUESTED = True
-
-    if _CURRENT_BUDGET is not None:
-        with _CURRENT_BUDGET.get_lock():
-            _CURRENT_BUDGET.value = 0
+    _drain_and_stop("interrupted")
 
     print(
         "\nStopping: letting workers finish the episodes they're on, then "
@@ -400,10 +449,18 @@ def merge_tables(worker_table_paths, output_path):
     write_json_atomic(output_path, merged)
 
 
-def save_progress(state_path, round_num, epsilon, total_episodes, successes, best_demo_key):
+def save_progress(
+    state_path, round_num, epsilon, total_episodes, successes, best_demo_key,
+    round_seconds=None,
+):
     # Atomic, and written last in a round on purpose: this is the file
     # tools/checkpoint_artifacts.sh watches to decide a round finished, so
     # it must never appear complete while the Q-table beside it isn't.
+    #
+    # round_seconds is how long *this* round actually took, kept around so
+    # a future run with a POKEMON_RED_STOP_BY deadline has something to
+    # estimate against -- without it, "will there be time for another
+    # round" is a guess with no data behind it at all.
     write_json_atomic(
         state_path,
         {
@@ -412,6 +469,7 @@ def save_progress(state_path, round_num, epsilon, total_episodes, successes, bes
             "total_episodes": total_episodes,
             "successes": successes,
             "best_demo_key": list(best_demo_key) if best_demo_key is not None else None,
+            "last_round_seconds": round_seconds,
         },
     )
 
@@ -443,14 +501,54 @@ def initial_state(state_path, model_path):
             progress["total_episodes"],
             progress["successes"],
             progress["best_demo_key"],
+            # Older state files predate this field.
+            progress.get("last_round_seconds"),
         )
 
     if model_path.exists():
         print(f"Warm-starting from existing Q-table, epsilon={WARM_START_EPSILON:.3f}")
-        return 1, WARM_START_EPSILON, 0, 0, None
+        return 1, WARM_START_EPSILON, 0, 0, None, None
 
     print("Starting from scratch")
-    return 1, 1.0, 0, 0, None
+    return 1, 1.0, 0, 0, None, None
+
+
+def _confirm_stop_by_is_workable(deadline, last_round_seconds, num_workers):
+    """
+    Warn, and ask before proceeding, when the deadline looks too close to
+    finish even one more round -- rather than silently starting a round
+    that stop_by is just going to cut off, or worse, draining it away in
+    its first minute for basically nothing.
+
+    Only possible when a previous round on this same state file measured
+    how long a round actually takes (see save_progress's round_seconds);
+    with no prior measurement there's nothing to estimate from, so this
+    just announces the deadline and lets the run proceed -- the check
+    reapplies next time with real data once a round has finished.
+    """
+    remaining = (deadline - datetime.now(PACIFIC_TZ)).total_seconds()
+    remaining_note = f"{remaining / 60:.0f} min from now" if remaining > 0 else "already passed"
+    print(
+        f"[{_pacific_timestamp()}] Stop-by time: "
+        f"{deadline.strftime('%Y-%m-%d %I:%M %p %Z')} ({remaining_note})."
+    )
+
+    if last_round_seconds is None:
+        return True
+
+    if remaining >= last_round_seconds:
+        return True
+
+    print(
+        f"  The last round on this state ({num_workers} workers) took "
+        f"~{last_round_seconds / 60:.0f} min, longer than the "
+        f"{max(remaining, 0) / 60:.0f} min left before the deadline. This "
+        f"run likely won't complete a full round -- it'll drain and save "
+        f"whatever's in flight when the deadline hits, which could be "
+        f"very little new training."
+    )
+    answer = input("  Proceed anyway? [y/N] ").strip().lower()
+    return answer in ("y", "yes")
 
 
 def train(
@@ -462,15 +560,24 @@ def train(
     num_workers=DEFAULT_NUM_WORKERS,
     episodes_per_round=DEFAULT_EPISODES_PER_ROUND,
     max_rounds=DEFAULT_MAX_ROUNDS,
+    stop_by=DEFAULT_STOP_BY,
 ):
     global _CURRENT_BUDGET
 
     worker_dir = WORKER_DIR / gif_prefix
     worker_dir.mkdir(parents=True, exist_ok=True)
 
-    start_round, epsilon, total_episodes, successes, best_demo_key = initial_state(
-        state_path, model_path
-    )
+    (
+        start_round, epsilon, total_episodes, successes, best_demo_key,
+        last_round_seconds,
+    ) = initial_state(state_path, model_path)
+
+    stop_by_deadline = _resolve_stop_by(stop_by)
+    if stop_by_deadline is not None and not _confirm_stop_by_is_workable(
+        stop_by_deadline, last_round_seconds, num_workers
+    ):
+        print("Not starting -- pick a later stop-by time or run without one.")
+        return
 
     signal.signal(signal.SIGINT, _request_graceful_stop)
 
@@ -482,13 +589,28 @@ def train(
     yielding = decide_yield(num_workers)
     mark_decision_for_workers(yielding)
     tier_note = " (yielding the top core tier to you)" if yielding else ""
+    stop_by_note = (
+        f" Stopping by {stop_by_deadline.strftime('%Y-%m-%d %I:%M %p %Z')}."
+        if stop_by_deadline is not None else ""
+    )
     print(
         f"[{_pacific_timestamp()}] {num_workers} workers, {episodes_per_round} "
-        f"episodes per round.{tier_note} Ctrl-C finishes the current round and "
-        f"saves it before exiting."
+        f"episodes per round.{tier_note}{stop_by_note} Ctrl-C finishes the "
+        f"current round and saves it before exiting."
     )
 
     for round_num in range(start_round, max_rounds + 1):
+        if (
+            stop_by_deadline is not None
+            and not _STOP_REQUESTED
+            and datetime.now(PACIFIC_TZ) >= stop_by_deadline
+        ):
+            print(
+                f"[{_pacific_timestamp()}] Stop-by time reached before round "
+                f"{round_num} could start; stopping here."
+            )
+            return
+
         table_paths = [worker_dir / f"worker{i}.json" for i in range(num_workers)]
         summary_paths = [worker_dir / f"worker{i}_summary.json" for i in range(num_workers)]
 
@@ -521,6 +643,20 @@ def train(
             while any(process.is_alive() for process in processes):
                 time.sleep(1)
                 now = time.monotonic()
+
+                if (
+                    stop_by_deadline is not None
+                    and not _STOP_REQUESTED
+                    and datetime.now(PACIFIC_TZ) >= stop_by_deadline
+                ):
+                    _drain_and_stop("stop-by time reached")
+                    print(
+                        f"[{_pacific_timestamp()}] Stop-by time reached -- "
+                        f"draining this round's budget; will merge and save "
+                        f"once in-flight episodes finish. Ctrl-C to abandon "
+                        f"instead."
+                    )
+
                 if now - last_status >= STATUS_INTERVAL_SECONDS:
                     last_status = now
                     claimed = episodes_per_round - remaining.value
@@ -565,6 +701,7 @@ def train(
                     )
             for process in processes:
                 process.join()
+            round_seconds = time.monotonic() - round_start
         except KeyboardInterrupt:
             # A second Ctrl-C during the drain. Workers ignore SIGINT, so
             # they have to be stopped explicitly, and nothing from this
@@ -646,13 +783,16 @@ def train(
                 save_gif(demo["frames"], f"{gif_prefix}_best_so_far.gif")
                 print(f"  [demo] new best so far (round {round_num})")
 
-        save_progress(state_path, round_num, epsilon, total_episodes, successes, best_demo_key)
+        save_progress(
+            state_path, round_num, epsilon, total_episodes, successes, best_demo_key,
+            round_seconds=round_seconds,
+        )
 
         if _STOP_REQUESTED:
             print(
-                f"Saved through round {round_num}. Relaunching resumes from "
-                f"round {round_num + 1} -- with a different worker count if you "
-                f"want, since it's read at launch."
+                f"Saved through round {round_num} ({_STOP_REASON}). Relaunching "
+                f"resumes from round {round_num + 1} -- with a different worker "
+                f"count or stop-by time if you want, since both are read at launch."
             )
             return
 
