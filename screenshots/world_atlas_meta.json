@@ -1,0 +1,1 @@
+{"tile": 16, "pad": 24, "frame_width": 160, "frame_height": 144, "world_min_x": 0, "world_min_y": 4, "maps": {"1": {"prefix": "map1", "offset": [0, 0], "min_x": 0, "min_y": 4}, "12": {"prefix": "route1", "offset": [10, 36], "min_x": 4, "min_y": 1}}}
