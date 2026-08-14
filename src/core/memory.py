@@ -195,6 +195,14 @@ def has_item(pyboy, item_id):
     return item_id in get_bag_item_ids(pyboy)
 
 
+def get_held_milestone_items(pyboy, item_ids):
+    """Which of the given item ids the bag currently holds, as a frozenset.
+    Built for milestone-item reward tracking (see whole_game_rewards.py) --
+    a set-membership check against a small fixed list of quest items,
+    rather than scanning the whole bag inline in the reward function."""
+    return frozenset(item_ids) & set(get_bag_item_ids(pyboy))
+
+
 def is_in_battle(pyboy):
     return pyboy.memory[ADDR_IS_IN_BATTLE] != 0
 
@@ -447,4 +455,91 @@ def get_pokedex_owned_count(pyboy):
     return sum(
         bin(pyboy.memory[ADDR_POKEDEX_OWNED_START + i]).count("1")
         for i in range(POKEDEX_OWNED_BYTES)
+    )
+
+
+# One bit per badge, in gym order (bit 0 = Boulder). Counting bits rather
+# than naming badges deliberately: the whole-game agent only needs "how much
+# progress", and a popcount needs no badge-name table to get wrong -- the
+# same reasoning as the Pokedex counter above.
+#
+# This address is the one the README already cites for the Boulder Badge,
+# but nothing in this project ever read it from code before now; it was
+# checked by hand once and left at that. Verified against known-good states
+# before being trusted (tools/verify_whole_game_readers.py): bedroom.state
+# and starter_obtained.state read 0, and both boulder_badge.state and
+# route3_leveled.state read exactly 1 -- the latter being the independent
+# check, since Route 3 is only reachable *because* Brock was beaten.
+ADDR_BADGES = 0xD356
+
+
+def get_badges(pyboy):
+    return bin(pyboy.memory[ADDR_BADGES]).count("1")
+
+
+# The party is six copies of the same 44-byte record starting at
+# ADDR_PARTY_SPECIES, so every existing single-slot address above is just
+# slot 0 of its column: level 0xD18C is +0x21 into the record, HP 0xD16C is
+# +1, max HP 0xD18D is +0x22. The readers below walk that same stride rather
+# than introducing new base addresses, so they cannot drift from the
+# already-verified slot-0 values.
+#
+# get_party_level and get_party_hp above are left exactly as they are: the
+# battle environments that call them are single-Pokemon tasks by
+# construction, and changing what they return would alter trained-policy
+# observations for no benefit.
+PARTY_STRUCT_BYTES = 44
+MAX_PARTY_SIZE = 6
+
+
+def _party_slots(pyboy):
+    return range(min(get_party_count(pyboy), MAX_PARTY_SIZE))
+
+
+def get_party_levels(pyboy):
+    """Every party member's level, in slot order. Empty list for an empty
+    party -- the bedroom start, before the starter is chosen."""
+    return [
+        pyboy.memory[ADDR_PARTY_LEVEL + slot * PARTY_STRUCT_BYTES]
+        for slot in _party_slots(pyboy)
+    ]
+
+
+def get_party_hp_total(pyboy):
+    return sum(
+        read_u16(pyboy, ADDR_PARTY_HP + slot * PARTY_STRUCT_BYTES)
+        for slot in _party_slots(pyboy)
+    )
+
+
+def get_party_max_hp_total(pyboy):
+    return sum(
+        read_u16(pyboy, ADDR_PARTY_MAX_HP + slot * PARTY_STRUCT_BYTES)
+        for slot in _party_slots(pyboy)
+    )
+
+
+def get_party_hp_total_fraction(pyboy):
+    """Whole-party health as 0.0-1.0. An empty party reads 0.0 rather than
+    dividing by zero, matching get_party_hp_fraction's max(..., 1) guard."""
+    return get_party_hp_total(pyboy) / max(get_party_max_hp_total(pyboy), 1)
+
+
+# Gen 1 keeps story progress as a large block of event bits -- doors opened,
+# people talked to, items collected, rivals beaten. Counting how many are set
+# gives the whole-game agent a dense progress signal without this project
+# having to enumerate and verify every individual event it might care about,
+# which is the same trade the Pokedex and badge counters make.
+#
+# It is deliberately only ever used as a *delta* (this step versus last), so
+# the absolute total including whatever bits the game sets for its own
+# bookkeeping doesn't matter -- only that it increases when the story does.
+ADDR_EVENT_FLAGS_START = 0xD747
+ADDR_EVENT_FLAGS_END = 0xD886  # inclusive
+
+
+def get_event_flags_sum(pyboy):
+    return sum(
+        bin(pyboy.memory[addr]).count("1")
+        for addr in range(ADDR_EVENT_FLAGS_START, ADDR_EVENT_FLAGS_END + 1)
     )

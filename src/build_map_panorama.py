@@ -1,14 +1,24 @@
 import json
+import os
 import sys
 
-from core.emulator import create_emulator, run_frames
-from core.state import load_state
-from core.atomic_io import write_json_atomic
-from core.config import PROJECT_ROOT, SCREENSHOT_DIR
-from core.pathfind import survey_map
-from core.parallel_survey import parallel_survey_map, NUM_WORKERS
-from core.panorama import stitch_panorama
-from core.memory import get_player_position
+# Headless by default, and set before any core import -- core/config.py
+# reads this at import time. Every training/eval script in this project
+# follows this convention (see train_battle_agent.py's comment); this one
+# didn't, and running it -- especially with parallel_survey's multiple
+# worker processes -- popped open several real, visible Game Boy windows
+# with no warning. Pass POKEMON_AI_WINDOW_MODE=SDL2 explicitly to actually
+# watch a survey happen.
+os.environ.setdefault("POKEMON_AI_WINDOW_MODE", "null")
+
+from core.emulator import create_emulator, run_frames  # noqa: E402
+from core.state import load_state  # noqa: E402
+from core.atomic_io import write_json_atomic  # noqa: E402
+from core.config import PROJECT_ROOT, SCREENSHOT_DIR  # noqa: E402
+from core.pathfind import survey_map  # noqa: E402
+from core.parallel_survey import parallel_survey_map, NUM_WORKERS  # noqa: E402
+from core.panorama import stitch_panorama  # noqa: E402
+from core.memory import get_player_position  # noqa: E402
 
 # Builds a panorama of whatever map a save state starts on, by walking
 # every reachable tile and capturing the screen at each one.
