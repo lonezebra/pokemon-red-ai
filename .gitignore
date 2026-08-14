@@ -98,3 +98,7 @@ screenshots/mashups/whole_game_*/
 # exactly the "any later round supersedes it" class the GIF rule above
 # already refuses.
 archive/segmented-skills/screenshots/training_scratch/
+
+# reports/: the template and build script are durable; the built page is
+# reproducible from them and 1.8MB of base64, so it stays out.
+reports/template/report.html
