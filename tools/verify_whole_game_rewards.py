@@ -27,6 +27,8 @@ from rewards.whole_game_rewards import (  # noqa: E402
     MAP_HOP_DISTANCE_TO_OAKS_LAB,
     MILESTONE_DELIVERED_REWARD,
     MILESTONE_PICKUP_REWARD,
+    NEW_MAP_REWARD,
+    NEW_TILE_REWARD,
     OAKS_LAB_MAP_ID,
     UNKNOWN_HOP_DISTANCE,
     calculate_whole_game_reward,
@@ -154,6 +156,33 @@ def main():
         "a new tile beats a revisited one",
         fresh["explore"] > stale["explore"],
         f"{fresh['explore']} vs {stale['explore']}",
+    ))
+
+    print("\nThe frontier (entering a map this episode hasn't seen)")
+    _, new_map = calculate_whole_game_reward(
+        state(), state(), tile_is_new=True, map_is_new=True,
+    )
+    _, old_map = calculate_whole_game_reward(
+        state(), state(), tile_is_new=True, map_is_new=False,
+    )
+    results.append(check(
+        "a first-visit map pays the frontier bonus once",
+        new_map["new_map"] == NEW_MAP_REWARD,
+        f"{new_map['new_map']}",
+    ))
+    results.append(check(
+        "re-entering a map this episode pays nothing",
+        old_map["new_map"] == 0.0,
+        f"{old_map['new_map']}",
+    ))
+    results.append(check(
+        "the env's flag is the only trigger -- the default is off",
+        calculate_whole_game_reward(state(), state(), True)[1]["new_map"] == 0.0,
+    ))
+    results.append(check(
+        "worth real ground (>= 100 tiles) but less than a badge",
+        NEW_TILE_REWARD * 100 <= NEW_MAP_REWARD < BADGE_REWARD,
+        f"{NEW_MAP_REWARD} vs tile {NEW_TILE_REWARD}, badge {BADGE_REWARD}",
     ))
 
     print("\nMilestone items (Oak's Parcel, and anything added the same way)")

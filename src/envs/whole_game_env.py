@@ -136,6 +136,11 @@ class PokemonRedWholeGameEnv(gym.Env):
 
         self.frames = deque(maxlen=FRAME_STACK)
         self.visited_tiles = set()
+        # Maps visited this episode, for NEW_MAP_REWARD -- same episodic
+        # shape as visited_tiles, tracked separately because a map boundary
+        # is the frontier signal the per-tile set can't express (see
+        # whole_game_rewards.NEW_MAP_REWARD for the measurements behind it).
+        self.visited_maps = set()
         self.step_count = 0
 
         # Debounce state for the milestone-item bag read -- see
@@ -253,6 +258,7 @@ class PokemonRedWholeGameEnv(gym.Env):
         # the frontier, instead of treating everything it has ever seen as
         # worthless.
         self.visited_tiles = {self._tile_key()}
+        self.visited_maps = {self._tile_key()[0]}
 
         frame = self._grab_frame()
         self.frames.clear()
@@ -308,9 +314,11 @@ class PokemonRedWholeGameEnv(gym.Env):
         tile = self._tile_key()
         tile_is_new = tile not in self.visited_tiles
         self.visited_tiles.add(tile)
+        map_is_new = tile[0] not in self.visited_maps
+        self.visited_maps.add(tile[0])
 
         reward, components = calculate_whole_game_reward(
-            before, after, tile_is_new
+            before, after, tile_is_new, map_is_new
         )
 
         # Milestone credit is capped to once per item per episode -- this

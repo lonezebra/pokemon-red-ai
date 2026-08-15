@@ -49,6 +49,29 @@ LEVEL_REWARD = 1.0
 # this project verified long ago.
 NEW_TILE_REWARD = 0.06
 
+# Entering a map not yet visited this episode. Added at 330M steps, when the
+# per-tile term above was measured to be the binding constraint on progress:
+# with delivery solved (36/36), the policy still spent recovered episode
+# time re-walking known ground, because episodic tile novelty pays the same
+# +0.06 for the thousandth lap of Viridian as for the first step into Route
+# 2 -- there is no gradient pointing at the frontier at all. Forcibly
+# unsticking the agent proved the point without any retraining
+# (tools/measure_stall_breaker.py): a fifth of the episode handed back
+# yielded +15% tiles, zero new events, and no new maps.
+#
+# 12.0 makes one map boundary worth 200 tiles of wandering (200 x 0.06),
+# and three story flags -- a real find. It stays well under a badge (60)
+# and delivery (100) so it cannot outbid actual progress, and raising
+# NEW_TILE_REWARD instead cannot do this job: explore is ~11% of episode
+# reward, and any per-tile value high enough to matter would swamp
+# everything else long before it pointed anywhere specific.
+#
+# Same non-farmable shape as every other term here: the env tracks the set
+# of maps visited this episode (seeded with the starting map, exactly like
+# visited_tiles), so a boundary pays once and re-entry pays nothing --
+# door-hopping between two maps nets one payment per map per episode, ever.
+NEW_MAP_REWARD = 12.0
+
 # Healing is rewarded so that using a Pokemon Center is learnable rather than
 # something the agent has to stumble into, but capped per step so it cannot
 # be turned into an income stream by repeatedly taking and healing damage.
@@ -185,7 +208,11 @@ CARRY_HOME_SHAPING_PER_HOP = 4.0
 STEP_COST = -0.001
 
 
-def calculate_whole_game_reward(before, after, tile_is_new):
+def calculate_whole_game_reward(before, after, tile_is_new, map_is_new=False):
+    # map_is_new defaults to False -- the neutral "term doesn't fire" value
+    # -- so the twenty-odd single-term checks in
+    # tools/verify_whole_game_rewards.py don't each carry a fourth argument
+    # that is noise for what they test. The env always passes it explicitly.
     """
     Score one step from two memory snapshots (see WholeGameEnv._read_state)
     plus whether the tile just entered had never been visited this episode.
@@ -213,6 +240,12 @@ def calculate_whole_game_reward(before, after, tile_is_new):
     )
 
     components["explore"] = NEW_TILE_REWARD if tile_is_new else 0.0
+
+    # The frontier term: crossing into a map this episode hasn't seen. The
+    # env decides map_is_new the same way it decides tile_is_new (a
+    # per-episode visited set, seeded at reset), so this fires exactly once
+    # per map per episode and door-hopping between two maps farms nothing.
+    components["new_map"] = NEW_MAP_REWARD if map_is_new else 0.0
 
     # Fires exactly once per pickup and once per delivery -- set difference
     # against the previous step's held items, same non-farmable shape as
