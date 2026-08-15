@@ -23,23 +23,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from rewards.whole_game_rewards import (  # noqa: E402
     BADGE_REWARD,
     BLACKOUT_PENALTY,
-    CARRY_HOME_SHAPING_PER_HOP,
-    MAP_HOP_DISTANCE_TO_OAKS_LAB,
     MILESTONE_DELIVERED_REWARD,
     MILESTONE_PICKUP_REWARD,
     NEW_MAP_REWARD,
     NEW_TILE_REWARD,
-    OAKS_LAB_MAP_ID,
-    UNKNOWN_HOP_DISTANCE,
     calculate_whole_game_reward,
 )
 
 MILESTONE_ITEM = 70  # OAKS_PARCEL_ITEM_ID -- see core/memory.py for how
                       # this value was verified
 
-VIRIDIAN_CITY_MAP_ID = 1   # hop 3 from Oak's Lab
-ROUTE_1_MAP_ID = 12        # hop 2 from Oak's Lab
-ROUTE_22_MAP_ID = 33       # hop 4 from Oak's Lab
+OAKS_LAB_MAP_ID = 40       # verified in core/memory's map-id ground truth
+VIRIDIAN_CITY_MAP_ID = 1
+ROUTE_1_MAP_ID = 12
+ROUTE_22_MAP_ID = 33
 
 
 def state(badges=0, events=0, levels=(5,), hp_fraction=1.0, blacked_out=False,
@@ -180,9 +177,12 @@ def main():
         calculate_whole_game_reward(state(), state(), True)[1]["new_map"] == 0.0,
     ))
     results.append(check(
-        "worth real ground (>= 100 tiles) but less than a badge",
-        NEW_TILE_REWARD * 100 <= NEW_MAP_REWARD < BADGE_REWARD,
-        f"{NEW_MAP_REWARD} vs tile {NEW_TILE_REWARD}, badge {BADGE_REWARD}",
+        "worth real ground (>= 50 tiles) but a full tour stays under one delivery",
+        NEW_TILE_REWARD * 50 <= NEW_MAP_REWARD
+        and NEW_MAP_REWARD * 10 < MILESTONE_PICKUP_REWARD + MILESTONE_DELIVERED_REWARD,
+        f"{NEW_MAP_REWARD} vs tile {NEW_TILE_REWARD}, "
+        f"10-map tour {NEW_MAP_REWARD * 10} vs errand "
+        f"{MILESTONE_PICKUP_REWARD + MILESTONE_DELIVERED_REWARD}",
     ))
 
     print("\nMilestone items (Oak's Parcel, and anything added the same way)")
@@ -218,7 +218,13 @@ def main():
         f"{never_had_it['milestone']}",
     ))
 
-    print("\nCarrying the Parcel home")
+    print("\nCarrying the Parcel is free (carry_home is retired)")
+    # carry_home once paid +/-4 per hop toward/away from Oak while holding
+    # the Parcel. Combined with the frontier bonus it taught the policy to
+    # never pick the Parcel up at all (0/28 deliveries from a 36/36
+    # checkpoint, the Mart never entered) -- holding had become a tax on the
+    # touring the frontier bonus paid for. These checks are the regression
+    # guard against any direction-dependent holding cost coming back.
     holding_at_viridian = state(
         milestone_items={MILESTONE_ITEM}, map_id=VIRIDIAN_CITY_MAP_ID
     )
@@ -228,84 +234,19 @@ def main():
     holding_at_route22 = state(
         milestone_items={MILESTONE_ITEM}, map_id=ROUTE_22_MAP_ID
     )
-    empty_at_viridian = state(map_id=VIRIDIAN_CITY_MAP_ID)
-    empty_at_route1 = state(map_id=ROUTE_1_MAP_ID)
 
-    _, closer = calculate_whole_game_reward(
-        holding_at_viridian, holding_at_route1, False
-    )
-    results.append(check(
-        "moving a hop closer while holding it pays one hop's worth",
-        closer["carry_home"] == CARRY_HOME_SHAPING_PER_HOP,
-        f"{closer['carry_home']}",
-    ))
-
-    _, farther = calculate_whole_game_reward(
-        holding_at_route1, holding_at_viridian, False
-    )
-    results.append(check(
-        "moving a hop farther while holding it costs the same amount",
-        farther["carry_home"] == -CARRY_HOME_SHAPING_PER_HOP,
-        f"{farther['carry_home']}",
-    ))
-
-    _, empty_handed_walk = calculate_whole_game_reward(
-        empty_at_viridian, empty_at_route1, False
-    )
-    results.append(check(
-        "the same walk without the Parcel pays nothing",
-        empty_handed_walk["carry_home"] == 0.0,
-        f"{empty_handed_walk['carry_home']}",
-    ))
-
-    _, pickup_step = calculate_whole_game_reward(
-        empty_at_viridian, holding_at_viridian, False
-    )
-    results.append(check(
-        "the pickup step itself isn't double-counted by carry_home",
-        pickup_step["carry_home"] == 0.0,
-        f"{pickup_step['carry_home']}",
-    ))
-
-    delivered_at_oaks_lab = state(map_id=OAKS_LAB_MAP_ID)
-    holding_at_oaks_lab = state(
-        milestone_items={MILESTONE_ITEM}, map_id=OAKS_LAB_MAP_ID
-    )
-    _, delivery_step = calculate_whole_game_reward(
-        holding_at_oaks_lab, delivered_at_oaks_lab, False
-    )
-    results.append(check(
-        "the delivery step itself isn't double-counted by carry_home",
-        delivery_step["carry_home"] == 0.0,
-        f"{delivery_step['carry_home']}",
-    ))
-
-    _, round_trip_out = calculate_whole_game_reward(
-        holding_at_viridian, holding_at_route22, False
-    )
-    _, round_trip_back = calculate_whole_game_reward(
-        holding_at_route22, holding_at_viridian, False
-    )
-    results.append(check(
-        "a round trip through unmapped-adjacent ground nets zero, not farmable",
-        round_trip_out["carry_home"] + round_trip_back["carry_home"] == 0.0,
-        f"out={round_trip_out['carry_home']}, back={round_trip_back['carry_home']}",
-    ))
-
-    unmapped_map_id = 9999
-    holding_somewhere_unmapped = state(
-        milestone_items={MILESTONE_ITEM}, map_id=unmapped_map_id
-    )
-    _, into_unknown = calculate_whole_game_reward(
-        holding_at_viridian, holding_somewhere_unmapped, False
-    )
-    results.append(check(
-        "wandering off this table's edge while holding it is treated as moving away",
-        into_unknown["carry_home"] < 0.0
-        and unmapped_map_id not in MAP_HOP_DISTANCE_TO_OAKS_LAB
-        and UNKNOWN_HOP_DISTANCE > max(MAP_HOP_DISTANCE_TO_OAKS_LAB.values()),
-        f"{into_unknown['carry_home']}",
-    ))
+    walks = [
+        ("toward Oak", holding_at_viridian, holding_at_route1),
+        ("away from Oak", holding_at_route1, holding_at_viridian),
+        ("off the old map table entirely", holding_at_viridian, holding_at_route22),
+    ]
+    for label, src, dst in walks:
+        total, comps = calculate_whole_game_reward(src, dst, False)
+        results.append(check(
+            f"walking {label} while holding it is direction-free",
+            "carry_home" not in comps and total == comps["step"],
+            f"total={total}",
+        ))
 
     print("\nStanding still")
     idle_total, _ = calculate_whole_game_reward(state(), state(), False)

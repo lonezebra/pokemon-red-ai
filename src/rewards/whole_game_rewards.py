@@ -59,18 +59,28 @@ NEW_TILE_REWARD = 0.06
 # (tools/measure_stall_breaker.py): a fifth of the episode handed back
 # yielded +15% tiles, zero new events, and no new maps.
 #
-# 12.0 makes one map boundary worth 200 tiles of wandering (200 x 0.06),
-# and three story flags -- a real find. It stays well under a badge (60)
-# and delivery (100) so it cannot outbid actual progress, and raising
-# NEW_TILE_REWARD instead cannot do this job: explore is ~11% of episode
-# reward, and any per-tile value high enough to matter would swamp
-# everything else long before it pointed anywhere specific.
+# 5.0, cut from the original 12.0 by the first live test of this term.
+# At 12.0, eight reachable map boundaries added up to ~96 of dense, early,
+# zero-risk income per episode, and 20M steps of retraining from the
+# delivery-solved 330M checkpoint converged on collecting exactly that: the
+# policy toured 7-8 maps per episode (Route 22 went from never-visited to
+# 9.4% of all steps) and abandoned the Parcel errand completely -- 0/28
+# deliveries, the Mart never entered, from a checkpoint that delivered
+# 36/36. The gated maps the bonus was aimed at stayed locked, because
+# unlocking them requires the delivery it out-competed.
+#
+# 5.0 keeps a real frontier pull -- one boundary still buys ~83 tiles of
+# wandering, and slightly over one story flag -- while the full tour now
+# totals ~40, well under the 115 the errand pays. Still far below a badge
+# (60 for ONE find) and delivery (100), and raising NEW_TILE_REWARD instead
+# still cannot do this job: any per-tile value loud enough to matter swamps
+# everything else long before it points anywhere specific.
 #
 # Same non-farmable shape as every other term here: the env tracks the set
 # of maps visited this episode (seeded with the starting map, exactly like
 # visited_tiles), so a boundary pays once and re-entry pays nothing --
 # door-hopping between two maps nets one payment per map per episode, ever.
-NEW_MAP_REWARD = 12.0
+NEW_MAP_REWARD = 5.0
 
 # Healing is rewarded so that using a Pokemon Center is learnable rather than
 # something the agent has to stumble into, but capped per step so it cannot
@@ -124,75 +134,27 @@ MILESTONE_ITEM_IDS = frozenset(MILESTONE_ITEMS)
 # batches. A 25.0 payoff, thousands of steps after the last dense reward and
 # competing against a whole episode's worth of exploration reward for territory
 # in the other direction, was not a strong enough signal to make the return
-# trip worth it -- see carry_home below for the other half of this fix.
+# trip worth it. (The other half of that fix was the carry_home shaping,
+# since retired -- see the note directly below.)
 MILESTONE_PICKUP_REWARD = 15.0
 MILESTONE_DELIVERED_REWARD = 100.0
 
-# Map-level "distance home" for the carry-home shaping term below. Hop counts
-# to OAKS_LAB (map 40), by number of connections/warps crossed -- not
-# guessed, but built from pret/pokered's own map headers and warp tables
-# (data/maps/headers/*.asm's `connection` lines for outdoor maps,
-# data/maps/objects/*.asm's `warp_event`/LAST_MAP pairs for building
-# interiors), read directly rather than assumed from general game knowledge:
-#
-#   38 (RedsHouse2F, the bedroom) -- warps to --> 37 (RedsHouse1F)
-#   37 (RedsHouse1F)              -- warps to --> 0  (PalletTown)
-#   39 (BluesHouse)               -- warps to --> 0  (PalletTown)
-#   40 (OaksLab)                  -- warps to --> 0  (PalletTown)
-#   0  (PalletTown)               -- connects to --> 12 (Route1)
-#   12 (Route1)                   -- connects to --> 1  (ViridianCity)
-#   1  (ViridianCity)             -- warps to --> 41 (ViridianPokecenter),
-#                                                 42 (ViridianMart),
-#                                                 43 (ViridianSchoolHouse),
-#                                                 44 (ViridianNicknameHouse)
-#   1  (ViridianCity)             -- connects to --> 33 (Route22)
-#   33 (Route22)                  -- warps to --> 193 (Route22Gate)
-#
-# Coarser than true tile distance -- it only changes when the agent crosses a
-# map boundary, not while walking around inside one -- but it needs no new
-# world-space survey data (only Route1/Viridian City have verified world
-# offsets; see screenshots/world_atlas_meta.json) and it already separates
-# exactly the ground this project's own eval data shows the agent
-# over-exploring once it's holding the Parcel: Route 22 sits at hop 4, the
-# same distance as every Viridian building, and further than anywhere on the
-# direct Pallet-Route1-Viridian line home.
-#
-# Anything not listed (unexplored ground, or a map this table hasn't been
-# extended to yet) falls back to UNKNOWN_HOP_DISTANCE, one hop past the
-# farthest verified entry -- deliberately treated as "far", since the whole
-# point of this term is to counterweight the pull of fresh exploration while
-# the agent is supposed to be heading home instead.
-OAKS_LAB_MAP_ID = 40
-MAP_HOP_DISTANCE_TO_OAKS_LAB = {
-    40: 0,    # OaksLab
-    0: 1,     # PalletTown
-    37: 2,    # RedsHouse1F
-    39: 2,    # BluesHouse
-    12: 2,    # Route1
-    38: 3,    # RedsHouse2F (bedroom)
-    1: 3,     # ViridianCity
-    41: 4,    # ViridianPokecenter
-    42: 4,    # ViridianMart
-    43: 4,    # ViridianSchoolHouse
-    44: 4,    # ViridianNicknameHouse
-    33: 4,    # Route22
-    193: 5,   # Route22Gate
-}
-UNKNOWN_HOP_DISTANCE = max(MAP_HOP_DISTANCE_TO_OAKS_LAB.values()) + 1
-
-# Same weight class as EVENT_FLAG_REWARD -- closing one hop toward home while
-# carrying the Parcel is treated as roughly as meaningful as flipping a story
-# flag. Applied only on steps where the agent is holding a milestone item on
-# *both* sides of the step (see calculate_whole_game_reward) -- the pickup
-# and delivery steps themselves are scored solely by MILESTONE_PICKUP_REWARD
-# and MILESTONE_DELIVERED_REWARD above, so this term never fires on the two
-# steps that already have their own reward and can't be gamed by pickup/drop
-# cycling. Within a single map it's silent (hop distance only changes on a
-# map crossing), and any back-and-forth between two adjacent maps nets
-# exactly zero over a round trip -- one hop of credit out, one hop of debit
-# back -- so there's no loop to farm, the same non-exploitable shape every
-# other delta-based term in this file already has.
-CARRY_HOME_SHAPING_PER_HOP = 4.0
+# carry_home -- the +/-4-per-hop shaping that guided the Parcel back to Oak
+# while it was held -- was RETIRED here, deliberately, after doing its job
+# and then turning hostile. It was added when delivery had happened once in
+# ten checkpoints and the return trip needed a dense signal; by 330M steps
+# the errand ran at 36/36 with the term essentially inert (a beeline home
+# nets the same total as no term at all). Then NEW_MAP_REWARD arrived and
+# the interaction bit: for a policy that also tours map boundaries, holding
+# the Parcel turned every wander away from Oak into a -4-per-hop tax, and
+# 20M steps of retraining found the obvious dodge -- never enter the Mart,
+# never pick the Parcel up (0/28 deliveries from a 36/36 checkpoint, Mart
+# untouched across every eval episode). A shaping term that punishes
+# *starting* the errand it was built to finish has no remaining upside once
+# the finished behavior exists in the resumed checkpoint; scaffolding comes
+# down when the wall stands. The hop table it used (built from pret/pokered
+# map headers, not guessed) lives on in git history should some future
+# milestone need distance-to-target shaping again.
 
 # Deliberately almost nothing, and worth explaining rather than tuning by
 # feel. Episodes here always run the full max_steps -- Pokemon Red has no
@@ -258,17 +220,9 @@ def calculate_whole_game_reward(before, after, tile_is_new, map_is_new=False):
         + MILESTONE_DELIVERED_REWARD * len(delivered)
     )
 
-    # Dense signal for the leg the milestone reward alone couldn't teach:
-    # carrying the Parcel home. Only on steps holding a milestone item both
-    # before and after -- see CARRY_HOME_SHAPING_PER_HOP's comment for why
-    # that boundary matters and why it can't be farmed.
-    if before["milestone_items"] and after["milestone_items"]:
-        components["carry_home"] = CARRY_HOME_SHAPING_PER_HOP * (
-            MAP_HOP_DISTANCE_TO_OAKS_LAB.get(before["map_id"], UNKNOWN_HOP_DISTANCE)
-            - MAP_HOP_DISTANCE_TO_OAKS_LAB.get(after["map_id"], UNKNOWN_HOP_DISTANCE)
-        )
-    else:
-        components["carry_home"] = 0.0
+    # No carry_home term here anymore -- holding the Parcel is free, in
+    # every direction. See the retirement note below
+    # MILESTONE_DELIVERED_REWARD for what it did and why it had to go.
 
     healed = after["hp_fraction"] - before["hp_fraction"]
     if healed > 0 and not after["blacked_out"]:
