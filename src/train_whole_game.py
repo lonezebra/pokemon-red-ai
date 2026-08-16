@@ -15,7 +15,10 @@ import multiprocessing  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 from stable_baselines3 import PPO  # noqa: E402
-from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
+from stable_baselines3.common.callbacks import (  # noqa: E402
+    BaseCallback,
+    CallbackList,
+)
 from stable_baselines3.common.monitor import Monitor  # noqa: E402
 from stable_baselines3.common.vec_env import SubprocVecEnv  # noqa: E402
 
@@ -55,6 +58,13 @@ CHECKPOINT_EVERY = int(os.environ.get("POKEMON_RED_CHECKPOINT_EVERY") or 100_000
 
 START_STATE = os.environ.get("POKEMON_RED_START_STATE")
 MAX_STEPS = int(os.environ.get("POKEMON_RED_EPISODE_STEPS") or DEFAULT_MAX_STEPS)
+
+# The collapse-detection gate (see DeliveryGateCallback). Every 5M steps by
+# default -- frequent enough to stop a bad run within tens of minutes rather
+# than hours, infrequent enough that its short single-env rollouts (a few
+# seconds each) are noise against a run measured in hours. 0 disables it,
+# for the cases that don't have a milestone-item signal to gate on.
+DELIVERY_GATE_EVERY = int(os.environ.get("POKEMON_RED_GATE_EVERY") or 5_000_000)
 
 
 def atomic_model_save(model, path):
@@ -112,6 +122,121 @@ class AtomicCheckpointCallback(BaseCallback):
             if self.verbose >= 1:
                 print(f"Saved checkpoint to {checkpoint_path}")
         return True
+
+
+class DeliveryGateCallback(BaseCallback):
+    """Catch a training collapse in minutes, not the five hours it has cost
+    every time so far.
+
+    Three of the last five long continuations from a converged policy have
+    collapsed -- most damningly the 350M -> 380M -> 410M sequence, where
+    380M reached Viridian Forest and 410M, resumed from it with nothing
+    changed but more steps, lost the errand entirely. Recovering from that
+    meant noticing late (ep_rew_mean stayed misleadingly healthy -- one
+    bisection found delivery already at 0/3 while the curve still read
+    ~248) and then manually bisecting hundreds of checkpoints to find the
+    last good one. This callback is that bisection, running automatically
+    during training instead of after the fact.
+
+    Every `eval_freq` calls it plays a handful of short episodes with the
+    *current* policy and counts deliveries -- the same ground-truth signal
+    every eval script in this project already uses, not a proxy off the
+    training curve. A healthy result promotes the current weights to
+    known_good.zip, a separate file from the checkpoint history that only
+    ever moves forward when eval confirms the policy still works. Two
+    consecutive bad results (not one -- a single unlucky small-sample
+    batch happens even to a healthy policy) stop training outright, so a
+    collapse burns tens of minutes of compute instead of the full run, and
+    known_good.zip is left as the exact resume point.
+
+    Deliberately not integrated into the vectorized training envs: it
+    builds one throwaway single-process env per check, so eval never
+    perturbs the 14 parallel workers' state or their place in the rollout.
+
+    max_steps defaults to 8192, matching this project's standard eval
+    length (check_250m_delivery.py, post_delivery_analysis.py) rather than
+    something shorter and cheaper -- not a free choice. Delivery timing
+    drifts later as training progresses (34% into the episode at 350M,
+    64% at 380M in measured batches), so a gate episode has to be at least
+    as long as the standard eval or it stops seeing delivery on a policy
+    that is actually fine, and "fine" tips into "flagged as collapsed."
+    A smoke test of this callback against the known-good 380M checkpoint
+    at max_steps=4096 confirmed exactly that failure before this default
+    was corrected -- 0/3 on a policy that delivers 9/12 to 15/16 at 8192.
+    """
+
+    def __init__(self, save_path, eval_freq, episodes=3, max_steps=8192,
+                 min_deliveries=1, patience=2, verbose=1):
+        super().__init__(verbose)
+        self.save_path = Path(save_path)
+        self.eval_freq = eval_freq
+        self.episodes = episodes
+        self.max_steps = max_steps
+        self.min_deliveries = min_deliveries
+        self.patience = patience
+        self._consecutive_failures = 0
+
+    def _init_callback(self):
+        self.save_path.mkdir(parents=True, exist_ok=True)
+
+    def _run_eval(self):
+        # Local import: PokemonRedWholeGameEnv is already imported at module
+        # level for the vectorized workers, but constructing it here, once
+        # per gate check rather than once per process at import time, makes
+        # the throwaway nature of this env explicit at the call site.
+        env = PokemonRedWholeGameEnv(max_steps=self.max_steps)
+        delivered = 0
+        try:
+            for _ in range(self.episodes):
+                obs, _ = env.reset()
+                got_it = False
+                for _ in range(self.max_steps):
+                    action, _ = self.model.predict(obs, deterministic=False)
+                    obs, _, terminated, truncated, info = env.step(action)
+                    if info["reward_components"].get("milestone", 0.0) >= 100.0:
+                        got_it = True
+                    if terminated or truncated:
+                        break
+                delivered += int(got_it)
+        finally:
+            env.close()
+        return delivered
+
+    def _on_step(self):
+        if self.n_calls % self.eval_freq != 0:
+            return True
+
+        delivered = self._run_eval()
+        healthy = delivered >= self.min_deliveries
+
+        if healthy:
+            self._consecutive_failures = 0
+            known_good = self.save_path / "whole_game_known_good.zip"
+            atomic_model_save(self.model, known_good)
+            if self.verbose >= 1:
+                print(
+                    f"[gate] step {self.num_timesteps:,}: "
+                    f"{delivered}/{self.episodes} delivered -- OK, "
+                    f"known_good.zip updated"
+                )
+            return True
+
+        self._consecutive_failures += 1
+        print(
+            f"[gate] step {self.num_timesteps:,}: "
+            f"{delivered}/{self.episodes} delivered -- "
+            f"BELOW THRESHOLD ({self._consecutive_failures}/{self.patience})"
+        )
+        if self._consecutive_failures < self.patience:
+            return True
+
+        print(
+            f"\n[gate] stopping: {self.patience} consecutive checks below "
+            f"threshold at step {self.num_timesteps:,}. "
+            f"Resume from {self.save_path / 'whole_game_known_good.zip'}, "
+            f"not whole_game_latest.zip."
+        )
+        return False
 
 
 def tensorboard_dir():
@@ -235,6 +360,13 @@ def main():
         name_prefix="whole_game",
         verbose=1,
     )
+    callbacks = [checkpoint_callback]
+    if DELIVERY_GATE_EVERY > 0:
+        callbacks.append(DeliveryGateCallback(
+            save_path=MODEL_DIR,
+            eval_freq=max(DELIVERY_GATE_EVERY // NUM_ENVS, 1),
+        ))
+    callback = CallbackList(callbacks)
 
     # SB3's learn() treats total_timesteps as an absolute target only when
     # reset_num_timesteps=True. On resume it instead ADDS the model's own
@@ -253,7 +385,7 @@ def main():
     try:
         model.learn(
             total_timesteps=remaining_steps,
-            callback=checkpoint_callback,
+            callback=callback,
             reset_num_timesteps=resume_from is None,
             progress_bar=False,
         )

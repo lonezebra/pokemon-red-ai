@@ -34,6 +34,7 @@ was a symptom and the real problem is elsewhere.
 
 import argparse
 import os
+import random
 import sys
 from collections import Counter
 from pathlib import Path
@@ -46,14 +47,32 @@ import gymnasium as gym  # noqa: E402
 from stable_baselines3 import PPO  # noqa: E402
 
 from core.memory import is_in_battle  # noqa: E402
-from envs.whole_game_env import PokemonRedWholeGameEnv  # noqa: E402
+from envs.whole_game_env import ACTIONS, PokemonRedWholeGameEnv  # noqa: E402
 from watch_whole_game import resolve_model  # noqa: E402
 
 OAKS_LAB = 40
 
 
+DIRECTIONS = frozenset(
+    ACTIONS.index(name) for name in ("up", "down", "left", "right")
+)
+
+
 class StallBreaker(gym.Wrapper):
-    """Force random actions once the player has been immobile too long."""
+    """Force random actions once the player has walked into a wall too long.
+
+    Counts *walking into a wall*, not merely standing still: a step only
+    counts toward the stall if the action was a direction AND the player's
+    tile did not change. That distinction is what lets the limit come down.
+    "Position unchanged" alone is also true throughout dialogue -- where the
+    player is frozen by design and the correct action is to press A -- so a
+    tight limit on that signal would fire on every text box and mash random
+    buttons through the intro, Oak's speech, and the delivery cutscene. A
+    direction pressed with no movement means a wall (or an NPC), which is
+    exactly the state worth interrupting.
+
+    Battles are excluded for the same reason: position is meaningless there.
+    """
 
     def __init__(self, env, limit):
         super().__init__(env)
@@ -62,6 +81,7 @@ class StallBreaker(gym.Wrapper):
         self._stall = 0
         self.forced_actions = 0
         self.stalls_broken = 0
+        self.longest_stall = 0
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
@@ -72,16 +92,26 @@ class StallBreaker(gym.Wrapper):
     def step(self, action):
         breaking = self._stall >= self.limit
         if breaking:
-            action = self.action_space.sample()
+            # Directions only. A random pick from the full set would spend
+            # a third of its attempts on A/B, which cannot move the player
+            # off a wall and can open menus that make things worse.
+            action = random.choice(tuple(DIRECTIONS))
             self.forced_actions += 1
 
         obs, reward, terminated, truncated, info = self.env.step(action)
         pos = (info["map_id"], info["x"], info["y"])
+        moved = pos != self._prev
 
-        if pos == self._prev and not is_in_battle(self.env.unwrapped.pyboy):
+        walked_into_wall = (
+            not moved
+            and int(action) in DIRECTIONS
+            and not is_in_battle(self.env.unwrapped.pyboy)
+        )
+        if walked_into_wall:
             self._stall += 1
+            self.longest_stall = max(self.longest_stall, self._stall)
         else:
-            if breaking and pos != self._prev:
+            if breaking and moved:
                 self.stalls_broken += 1
             self._stall = 0
         self._prev = pos
@@ -156,43 +186,54 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=6)
     parser.add_argument("--max-steps", type=int, default=8192)
-    parser.add_argument("--limit", type=int, default=50,
-                        help="consecutive immobile steps before breaking in")
+    parser.add_argument("--limits", default="5,10,25,50",
+                        help="comma-separated wall-press counts to compare; "
+                             "each is run as its own arm against one baseline")
     args = parser.parse_args()
 
+    limits = [int(x) for x in args.limits.split(",") if x.strip()]
     model_path = resolve_model(None)
     print(f"Policy: {model_path.name}")
-    print(f"Stall limit: {args.limit} immobile steps (battles excluded)")
+    print(f"Sweeping limits: {limits} (wall-presses, battles excluded)")
     model = PPO.load(model_path, device="cpu")
 
     base_env = PokemonRedWholeGameEnv(max_steps=args.max_steps)
+    arms = {}
     try:
-        print(f"\nRunning {args.episodes} episodes WITHOUT the breaker...", flush=True)
+        print(f"\nBaseline, no breaker ({args.episodes} episodes)...", flush=True)
         before = [play(model, base_env, args.max_steps) for _ in range(args.episodes)]
 
-        broken = StallBreaker(base_env, limit=args.limit)
-        print(f"Running {args.episodes} episodes WITH the breaker...", flush=True)
-        after = [play(model, broken, args.max_steps) for _ in range(args.episodes)]
+        for limit in limits:
+            broken = StallBreaker(base_env, limit=limit)
+            print(f"Limit {limit} ({args.episodes} episodes)...", flush=True)
+            rows = [play(model, broken, args.max_steps) for _ in range(args.episodes)]
+            arms[limit] = (rows, broken)
     finally:
         base_env.close()
 
-    summarise("WITHOUT stall-breaker (baseline)", before)
-    summarise(
-        "WITH stall-breaker", after,
-        extra=f"forced actions {broken.forced_actions}, "
-              f"stalls broken {broken.stalls_broken}",
-    )
+    summarise("Baseline (no breaker)", before)
+    for limit, (rows, broken) in arms.items():
+        summarise(
+            f"Limit {limit}", rows,
+            extra=f"forced actions {broken.forced_actions}, "
+                  f"stalls broken {broken.stalls_broken}, "
+                  f"longest wall-press run {broken.longest_stall}",
+        )
 
-    n = len(before)
-    b_tiles = sum(r["tiles"] for r in before) / n
-    a_tiles = sum(r["tiles"] for r in after) / n
-    b_lab = sum(r["lab_pct"] for r in before) / n
-    a_lab = sum(r["lab_pct"] for r in after) / n
-    print("\nDelta")
-    print("-----")
-    print(f"  tiles explored   {b_tiles:.0f} -> {a_tiles:.0f} "
-          f"({100*(a_tiles-b_tiles)/max(1,b_tiles):+.0f}%)")
-    print(f"  % steps in lab   {b_lab:.1f}% -> {a_lab:.1f}%")
+    mean = lambda rows, k: sum(r[k] for r in rows) / len(rows)  # noqa: E731
+    print("\nComparison")
+    print("-" * 74)
+    print(f"{'limit':>7}{'delivered':>12}{'tiles':>9}{'events':>9}"
+          f"{'reward':>10}{'% in lab':>10}{'(6,11)':>9}")
+    print(f"{'none':>7}{sum(r['delivered'] for r in before):>7}/{len(before):<4}"
+          f"{mean(before,'tiles'):>9.0f}{mean(before,'events'):>9.1f}"
+          f"{mean(before,'reward'):>10.1f}{mean(before,'lab_pct'):>9.1f}%"
+          f"{mean(before,'stuck_tile_steps'):>9.0f}")
+    for limit, (rows, _) in arms.items():
+        print(f"{limit:>7}{sum(r['delivered'] for r in rows):>7}/{len(rows):<4}"
+              f"{mean(rows,'tiles'):>9.0f}{mean(rows,'events'):>9.1f}"
+              f"{mean(rows,'reward'):>10.1f}{mean(rows,'lab_pct'):>9.1f}%"
+              f"{mean(rows,'stuck_tile_steps'):>9.0f}")
     print("DONE", flush=True)
 
 
