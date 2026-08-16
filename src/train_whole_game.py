@@ -163,9 +163,24 @@ class DeliveryGateCallback(BaseCallback):
     A smoke test of this callback against the known-good 380M checkpoint
     at max_steps=4096 confirmed exactly that failure before this default
     was corrected -- 0/3 on a policy that delivers 9/12 to 15/16 at 8192.
+
+    episodes defaults to 12 -- this project's standard eval batch size
+    (check_250m_delivery.py, etc.) -- for the same reason max_steps got
+    fixed: the first real run under this callback stopped itself at 390M
+    on two consecutive 0/3 checks, and a follow-up 12-episode eval on that
+    exact checkpoint came back 5/12, a perfectly normal rate for this
+    policy. At a true per-episode delivery rate of ~42%, 0/3 happens
+    ~20% of the time by chance alone, so two in a row (the patience=2
+    trigger) was a ~4% roll, not a signal -- and with several check
+    windows in a 30M-step run, a coin that unfair will come up more often
+    than the callback's whole purpose can tolerate. At 12 episodes the
+    same math drops to ~0.15% per check, ~0.0002% for two in a row:
+    exact zero (what every confirmed real collapse has actually shown --
+    350M's tourist run was 0/28, 410M was 0/12 and 0/6) stays a strong
+    signal, and ordinary variance stops looking like one.
     """
 
-    def __init__(self, save_path, eval_freq, episodes=3, max_steps=8192,
+    def __init__(self, save_path, eval_freq, episodes=12, max_steps=8192,
                  min_deliveries=1, patience=2, verbose=1):
         super().__init__(verbose)
         self.save_path = Path(save_path)
