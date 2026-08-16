@@ -188,7 +188,28 @@ def main():
 
     if resume_from is not None:
         print(f"Resuming from {resume_from.name}")
-        model = PPO.load(resume_from, env=vec_env, device=DEVICE)
+        # POKEMON_RED_LR: override the learning rate for this resume. Added
+        # after three of four long continuations from a converged policy
+        # collapsed at the training default of 3e-4 -- most damningly the
+        # 350M -> 380M run, which changed *nothing* about the reward or
+        # observation and still fell from ep_rew_mean ~244 to ~30-78 at
+        # ~360M and never recovered (eval delivery 36/36 -> 0/36). A policy
+        # that is already good needs small steps, not the exploration-sized
+        # ones that got it here. lr_schedule is overridden alongside
+        # learning_rate because it is the thing SB3's optimizer actually
+        # reads each update -- overriding learning_rate alone leaves the
+        # serialized old schedule in charge and changes nothing.
+        custom_objects = {}
+        lr_override = os.environ.get("POKEMON_RED_LR")
+        if lr_override:
+            lr = float(lr_override)
+            custom_objects["learning_rate"] = lr
+            custom_objects["lr_schedule"] = lambda _: lr
+        model = PPO.load(
+            resume_from, env=vec_env, device=DEVICE,
+            custom_objects=custom_objects,
+        )
+        print(f"Effective learning rate: {model.lr_schedule(1.0)}")
     else:
         model = PPO(
             "MultiInputPolicy",
